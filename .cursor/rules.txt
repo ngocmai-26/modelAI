@@ -1,0 +1,536 @@
+# Project Context – Machine Learning Library for CLO Prediction & XAI
+
+## 1. Project Overview
+
+This project is a Python-based Machine Learning library designed to:
+
+- Predict CLO scores (scale 0–6) using regression models
+- Perform statistical analysis and correlation analysis
+- Explain predictions using XAI (SHAP-based explanations)
+- Generate educational reasons and actionable solutions
+- Support both individual student analysis and class-level analysis
+- Be imported and used inside backend services (NOT a standalone app)
+
+**CRITICAL**: The project is NOT a notebook-based experiment repository.
+All code must be production-ready, testable, and reusable as a library.
+
+Scientific background, data assumptions, and model logic are defined in `.cursor/summary.txt`.
+
+## 2. Technology Stack
+
+- **Language**: Python >= 3.10
+- **ML stack**:
+  - pandas, numpy
+  - scikit-learn
+  - shap (TreeExplainer only)
+  - matplotlib / seaborn (visualization only, optional)
+- **Serialization**: joblib or pickle for models
+- **Testing**: pytest
+- **Build**: pyproject.toml, setuptools
+
+**Forbidden**:
+- No deep learning frameworks unless explicitly requested
+- No notebook (.ipynb) in core library code
+- No LLMs for reasoning generation
+- No interactive code (print(), input())
+
+All ML code must be written in pure Python modules.
+
+## 3. Project Structure Rules
+
+The project MUST follow this exact structure:
+
+```
+src/
+  ml_clo/
+    __init__.py
+
+    config/
+      feature_config.py      # Feature definitions and groups
+      model_config.py         # Model hyperparameters
+      xai_config.py          # SHAP thresholds, grouping rules
+
+    data/
+      loaders.py             # Excel file loaders
+      preprocessors.py       # Data cleaning, normalization
+      encoders.py            # Categorical encoding
+      validators.py          # Data validation
+
+    features/
+      feature_builder.py     # Feature engineering pipeline
+      feature_groups.py      # Pedagogical feature grouping
+
+    models/
+      base.py                # Base model interface
+      random_forest.py       # RandomForestRegressor wrapper
+      gradient_boosting.py   # GradientBoostingRegressor wrapper
+      ensemble.py            # Ensemble averaging
+
+    evaluation/
+      metrics.py             # Regression metrics (MAE, RMSE, R²)
+      statistical_tests.py   # T-test, ANOVA, correlation
+
+    xai/
+      shap_explainer.py      # SHAP computation
+      shap_postprocess.py    # SHAP aggregation, grouping
+
+    reasoning/
+      reason_generator.py    # Rule-based reason generation
+      solution_mapper.py     # Solution template mapping
+      templates.py           # Reason and solution templates
+
+    pipelines/
+      train_pipeline.py      # Training pipeline
+      predict_pipeline.py    # Individual prediction pipeline
+      analysis_pipeline.py   # Class-level analysis pipeline
+
+    outputs/
+      schemas.py             # Pydantic/dataclass schemas
+
+    utils/
+      logger.py              # Logging configuration
+      math_utils.py          # Math utilities
+      io_utils.py            # File I/O utilities
+
+tests/
+  unit/
+    test_data/
+    test_features/
+    test_models/
+    test_xai/
+  integration/
+    test_pipelines/
+
+scripts/
+  train.py                  # Training script
+  predict.py                # Prediction script
+  analyze_class.py          # Class analysis script
+
+pyproject.toml
+README.md
+requirements.txt
+requirements-dev.txt
+```
+
+## 4. Data & Scientific Assumptions
+
+### 4.1 Score Scale Conversion (CRITICAL)
+
+- **All CLO scores are on a 0–6 scale**
+- **Historical exam scores (0–10) MUST be converted before training**
+- **Conversion formula**: `CLO_6 = Score_10 / 10 × 6`
+- **No model ever sees raw 0–10 scores**
+- All training data must be in 0–6 scale
+- Future data from system will already be in 0–6 scale (no conversion needed)
+
+### 4.2 Data Sources
+
+The library must handle these data sources:
+- **Điểm rèn luyện** (Conduct scores): DRL_2021_2024.xlsx
+- **Điểm tổng** (Exam scores): Diem_Tong.xlsx
+- **Nhân khẩu học** (Demographics): Data K24 25 26 27.xlsx
+- **Phương pháp đánh giá** (Assessment methods): PPDG.xlsx / PPDGfull.xlsx
+- **Phương pháp giảng dạy** (Teaching methods): PPGD.xlsx / PPGDfull.xlsx
+- **Giờ thư viện** (Library hours): Gio_TV_22-24.xlsx
+- **Điểm danh** (Attendance): (to be specified)
+
+### 4.3 Data Preprocessing Rules
+
+All preprocessing steps must be:
+- **Deterministic**: Same input → same output
+- **Reproducible**: Fixed random seeds
+- **Isolated in `data/`**: No preprocessing logic outside this module
+- **Validated**: Use `validators.py` to check data quality
+
+**Specific preprocessing requirements**:
+- Standardize `Student_ID`, `Subject_ID`, `Lecturer_ID`
+- Clean `exam_score`: remove invalid values, convert to float
+- Encode teaching methods: `X → 1`, others/NaN → 0
+- Encode demographics:
+  - Gender: binary encoding
+  - Birth place → region (Bắc/Trung/Nam)
+  - Ethnicity, religion → integer encoding
+- Create binary `Result` variable: Pass (≥ 6), Fail (< 6) [for analysis only, not for training]
+
+### 4.4 Feature Engineering
+
+Features must be organized into these groups (defined in `feature_groups.py`):
+
+**A. Basic Information**:
+- `student_id_encoded`, `lecturer_encoded`, `subject_encoded`
+
+**B. Demographics**:
+- `gender_encoded`, `religion_encoded`, `birth_place_encoded`, `ethnicity_encoded`
+
+**C. Conduct Scores**:
+- `avg_conduct_score`, `latest_conduct_score`, `conduct_trend`
+
+**D. Self-Study**:
+- `study_hours_this_year`, `total_study_hours`
+
+**E. Academic History**:
+- `total_subjects`, `passed_subjects`, `pass_rate`
+- `avg_exam_score`, `recent_avg_score`, `improvement_trend`
+
+**F. Teaching & Assessment Methods**:
+- Teaching method features (from PPGDfull.xlsx)
+- Assessment method features (from PPDGfull.xlsx)
+
+## 5. Modeling Rules
+
+### 5.1 Problem Type
+- **Regression problem** (not classification)
+- **Target variable**: CLO score (0–6, continuous)
+
+### 5.2 Allowed Models
+
+**Random Forest Regressor**:
+- `n_estimators = 1000`
+- `max_depth = 25`
+- `random_state = 42`
+
+**Gradient Boosting Regressor**:
+- `n_estimators = 500`
+- `max_depth = 12`
+- `learning_rate = 0.03`
+- `random_state = 42`
+
+**Ensemble**:
+- Weighted average of both models
+- Weights determined by validation performance
+
+### 5.3 Model Interface
+
+Each model must:
+- Inherit from `models.base.BaseModel`
+- Expose: `train()`, `predict()`, `save()`, `load()`
+- Be serializable using joblib or pickle
+- Support model versioning
+- Log training metrics
+
+### 5.4 Training Rules
+
+- **No training logic in backend runtime paths**
+- Training only happens in `scripts/train.py`
+- Full retraining (no incremental learning)
+- Model versioning is mandatory
+- Log training data size and metrics
+
+## 6. XAI & Explainability Rules
+
+### 6.1 SHAP Configuration
+
+- **SHAP is the ONLY explainability method**
+- Use `shap.TreeExplainer` for tree-based models
+- **Raw SHAP values must NOT be exposed directly**
+- Must be processed through `xai/shap_postprocess.py`
+
+### 6.2 SHAP Processing Flow
+
+1. **Compute SHAP values** using TreeExplainer
+2. **Filter by absolute threshold** (configurable in `xai_config.py`)
+3. **Group by pedagogical feature groups**:
+   - **Tự học** (Self-study): Library hours
+   - **Chuyên cần** (Attendance): Attendance rate
+   - **Rèn luyện** (Conduct): Conduct scores
+   - **Học lực** (Academic): Exam scores
+   - **Giảng dạy** (Teaching): Teaching methods
+   - **Đánh giá** (Assessment): Assessment methods
+   - **Cá nhân** (Personal): Demographics
+4. **Normalize to percentage impact** for interpretation
+
+### 6.3 Individual Analysis (XAI)
+
+For each student:
+- Compute SHAP for all features
+- Identify negative SHAP values (reducing score)
+- Group by pedagogical categories
+- Calculate impact percentage per group
+- Return top N reasons with highest negative impact
+
+### 6.4 Class Analysis (XAI)
+
+For class-level:
+- Compute SHAP for all students
+- Average SHAP values per feature across class
+- Group by pedagogical categories
+- Calculate average impact percentage per group
+- Return top N common reasons
+
+### 6.4 Reason Generation
+
+- **Must be rule-based** (no ML, no LLMs)
+- Map from XAI outputs to pedagogical reasons
+- Use templates from `reasoning/templates.py`
+- Generate human-readable, educational language
+- Focus on: learning behavior, participation level, study methods
+
+### 6.5 Solution Mapping
+
+- **Deterministic and template-driven**
+- Map reason keys (e.g., `LOW_SELF_STUDY`, `LOW_ATTENDANCE`) to solutions
+- Context-aware (individual vs class)
+- Solutions must be:
+  - Easy to understand
+  - Actionable
+  - Appropriate for university education context
+
+## 7. Output & Integration Rules
+
+### 7.1 Output Schemas
+
+All public APIs must return structured objects defined in `outputs/schemas.py`:
+- Use Pydantic models or dataclasses
+- All outputs must be JSON-serializable
+- Backend-friendly (no complex objects)
+- Stable across versions (version schemas if breaking changes)
+
+### 7.2 Individual Analysis Output
+
+```python
+{
+    "predicted_clo_score": float,  # 0-6
+    "reasons": [
+        {
+            "reason_key": str,
+            "reason_text": str,
+            "impact_percentage": float,
+            "solutions": List[str]
+        }
+    ]
+}
+```
+
+### 7.3 Class Analysis Output
+
+```python
+{
+    "common_reasons": [
+        {
+            "reason_key": str,
+            "reason_text": str,
+            "average_impact_percentage": float,
+            "affected_students_count": int,
+            "priority_solutions": List[str]
+        }
+    ]
+}
+```
+
+### 7.4 Integration Pattern
+
+The library is designed to be imported as:
+
+```python
+from ml_clo.pipelines import predict_pipeline, analysis_pipeline
+
+# Individual prediction
+result = predict_pipeline.predict(
+    student_id="...",
+    subject_id="...",
+    lecturer_id="..."
+)
+
+# Class analysis
+class_result = analysis_pipeline.analyze_class(
+    subject_id="...",
+    lecturer_id="..."
+)
+```
+
+**No print(), no input(), no interactive code.**
+
+## 8. Data Storage & Retraining
+
+### 8.1 Data Storage (Learning Continuity)
+
+When performing class analysis:
+- **MUST store actual CLO scores** (0–6 scale) for future training
+- Store: `student_id`, `subject_id`, `lecturer_id`, `clo_score`, features, semester/year
+- Purpose: Use as training data for future retraining
+- Data format: Must be compatible with training pipeline
+
+### 8.2 Retraining Strategy
+
+- When new data is available:
+  - Merge old data + new data (both in 0–6 scale)
+  - Perform full retraining (no incremental learning)
+  - Increment model version
+  - Log new data count and training metrics
+
+## 9. Code Conventions & Style
+
+### 9.1 Python Style
+
+- Follow PEP 8
+- Use type hints for all function signatures
+- Use docstrings (Google style) for all public functions/classes
+- Maximum line length: 100 characters
+- Use meaningful variable names (no abbreviations unless standard)
+
+### 9.2 Error Handling
+
+- Use custom exceptions defined in `utils/exceptions.py`
+- Never let exceptions bubble up unhandled
+- Log all errors with context
+- Return error information in structured format
+
+### 9.3 Logging
+
+- Use structured logging (via `utils/logger.py`)
+- Log levels: DEBUG, INFO, WARNING, ERROR, CRITICAL
+- Log all model operations (train, predict, save, load)
+- Log data processing steps
+- Never log sensitive data (student IDs should be hashed in logs)
+
+### 9.4 Configuration Management
+
+- All configuration in `config/` directory
+- Use environment variables for paths and secrets
+- No hard-coded paths or credentials
+- Configuration must be validated on load
+
+## 10. Testing Rules
+
+### 10.1 Unit Tests
+
+Must cover:
+- Data preprocessing (loaders, preprocessors, encoders)
+- Feature engineering (feature_builder, feature_groups)
+- Model prediction (all model types)
+- XAI aggregation (SHAP postprocessing)
+- Reason generation and solution mapping
+
+### 10.2 Integration Tests
+
+Must cover:
+- Full prediction pipeline (individual)
+- Full analysis pipeline (class-level)
+- End-to-end training pipeline
+- Model save/load cycle
+
+### 10.3 Test Data
+
+- **No test should depend on real Excel files**
+- Use fixtures and synthetic data
+- Create test data generators in `tests/fixtures/`
+- Test data must be deterministic and reproducible
+
+### 10.4 Test Coverage
+
+- Aim for >80% code coverage
+- Critical paths (pipelines, models) must have >90% coverage
+- Use pytest for testing
+- Run tests in CI/CD pipeline
+
+## 11. Scripts & Build
+
+### 11.1 Scripts Requirements
+
+`scripts/` must:
+- Be executable (`chmod +x` or use `python -m`)
+- Only call pipelines (no business logic)
+- Accept command-line arguments
+- Use argparse or click for CLI
+- Have proper error handling and logging
+
+### 11.2 Build Requirements
+
+- `pyproject.toml` must be valid and complete
+- Library must be installable via `pip install -e .`
+- Include all dependencies in `requirements.txt`
+- Include dev dependencies in `requirements-dev.txt`
+- No hard-coded paths
+- Support Python 3.10+
+
+### 11.3 Distribution
+
+- Library name: `ml-clo` (hyphen for PyPI, underscore for import)
+- Version using semantic versioning (MAJOR.MINOR.PATCH)
+- Include README.md with usage examples
+- Include LICENSE file
+
+## 12. Additional AI Engineering Rules
+
+### 12.1 Reproducibility
+
+- **No hidden state outside model objects**
+- Every transformation must be reversible or traceable
+- Feature names must be stable across versions
+- **Random seeds must be fixed** (random_state=42)
+- Model versioning is mandatory
+- Log all random seeds used
+
+### 12.2 Data Validation
+
+- Validate input data before processing
+- Check data types, ranges, and required fields
+- Provide clear error messages for invalid data
+- Validate feature names match training data
+
+### 12.3 Model Versioning
+
+- Each trained model must have a version
+- Version format: `v{MAJOR}.{MINOR}.{PATCH}`
+- Store version metadata with model
+- Support loading models by version
+- Document breaking changes in version notes
+
+### 12.4 Performance
+
+- Optimize for inference speed (backend use case)
+- Cache SHAP explainers when possible
+- Use efficient data structures (numpy arrays, pandas)
+- Profile and optimize bottlenecks
+
+## 13. Forbidden Actions
+
+**Cursor AI must NOT**:
+- Introduce notebooks (`.ipynb`) into core logic
+- Mix training and inference code paths
+- Add unexplained magic numbers (use named constants)
+- Change data assumptions silently (document all changes)
+- Use LLMs for reasoning generation (rule-based only)
+- Add print() or input() statements
+- Hard-code file paths or credentials
+- Skip error handling
+- Create circular imports
+- Modify data in-place without explicit intent
+- Use global variables for state
+- Skip type hints on public APIs
+
+## 14. Cursor AI Specific Instructions
+
+When working on this project, Cursor AI should:
+
+1. **Always check existing code structure** before creating new files
+2. **Follow the exact project structure** defined in section 3
+3. **Read related files** before making changes (understand context)
+4. **Update tests** when adding new features
+5. **Use type hints** for all new code
+6. **Add docstrings** for all public functions/classes
+7. **Validate data** at entry points (loaders, pipelines)
+8. **Log operations** at appropriate levels
+9. **Handle errors gracefully** with custom exceptions
+10. **Maintain backward compatibility** when possible
+11. **Document breaking changes** if necessary
+12. **Run linters** (black, flake8, mypy) before finalizing code
+
+## 15. Statistical Analysis Requirements
+
+The library must support these statistical analyses (in `evaluation/statistical_tests.py`):
+
+- **Correlation analysis**: Pearson correlation
+- **T-test**: For gender comparison
+- **ANOVA**: For region comparison
+- **Distribution comparison**: For teaching methods
+- **Descriptive statistics**: Mean, median, std, etc.
+
+Visualization (optional, for analysis scripts only):
+- Heatmap (correlation matrix)
+- Histogram (score distribution)
+- Violin plot (scores by teaching method)
+- Scatter plot (study hours/conduct vs exam scores)
+- Boxplot (scores by groups)
+
+
