@@ -16,6 +16,10 @@ All code must be production-ready, testable, and reusable as a library.
 
 Scientific background, data assumptions, and model logic are defined in `.cursor/summary.txt`.
 
+**Documentation**: All model documentation, requirements, and data model specifications are located in the `docs/` directory. Key documents include:
+- `docs/model_requirements.md`: Model requirements and specifications
+- `docs/data_model.md`: Data model definitions and structure
+
 ## 2. Technology Stack
 
 - **Language**: Python >= 3.10

@@ -1,0 +1,610 @@
+# KẾ HOẠCH XÂY DỰNG MODEL CLO PREDICTION & XAI
+
+## 1. TỔNG QUAN DỰ ÁN
+
+### 1.1 Mục tiêu
+- Xây dựng thư viện Python để dự đoán điểm CLO (0-6) cho sinh viên
+- Phân tích nguyên nhân và đề xuất giải pháp dựa trên XAI (SHAP)
+- Hỗ trợ phân tích cá nhân và phân tích lớp
+- Tích hợp vào backend service (không phải standalone app)
+
+### 1.2 Phạm vi
+- Regression model: Random Forest + Gradient Boosting Ensemble
+- XAI: SHAP TreeExplainer
+- Rule-based reason generation (không dùng LLM)
+- Production-ready code (không phải notebook)
+
+### 1.3 Tài liệu tham khảo
+- `docs/model_requirements.md`: Yêu cầu chi tiết về model
+- `docs/data_model.md`: Cấu trúc và mô tả dữ liệu
+- `.cursor/rules.txt`: Quy tắc và cấu trúc project
+- `.cursor/summary.txt`: Tóm tắt khoa học
+
+---
+
+## 2. GIAI ĐOẠN 1: PHÂN TÍCH VÀ CHUẨN BỊ DỮ LIỆU
+
+### 2.1 Khảo sát dữ liệu hiện có
+**Thời gian ước tính: 2-3 ngày**
+
+#### 2.1.1 Các file dữ liệu cần xử lý
+- `diemrenluyen.xlsx`: Điểm rèn luyện (2,198 records)
+- `DiemTong.xlsx`: Điểm thi (25,257 records) - **QUAN TRỌNG: chuyển hệ 10 → hệ 6**
+- `nhankhau.xlsx`: Nhân khẩu học (428 records)
+- `PPDG.xlsx` / `PPDGfull.xlsx`: Phương pháp đánh giá
+- `PPGD.xlsx` / `PPGDfull.xlsx`: Phương pháp giảng dạy
+- `tuhoc.xlsx`: Giờ tự học (1,982 records)
+- `Dữ liệu điểm danh Khoa FIRA.xlsx`: Điểm danh (56,207 records)
+
+#### 2.1.2 Nhiệm vụ
+- [ ] Đọc và phân tích cấu trúc từng file
+- [ ] Xác định các cột key để JOIN (Student_ID, Subject_ID, Lecturer_ID)
+- [ ] Kiểm tra missing values, outliers
+- [ ] Xác định các biến cần mã hóa
+- [ ] Tạo data dictionary cho mỗi file
+
+### 2.2 Xây dựng Data Loaders
+**Thời gian ước tính: 3-4 ngày**
+
+#### 2.2.1 Module: `src/ml_clo/data/loaders.py`
+- [ ] Hàm load từng loại file Excel
+- [ ] Xử lý encoding và format khác nhau
+- [ ] Trả về DataFrame đã chuẩn hóa cột
+- [ ] Logging cho mỗi bước load
+
+#### 2.2.2 Các hàm cần implement
+```python
+- load_conduct_scores(file_path: str) -> pd.DataFrame
+- load_exam_scores(file_path: str) -> pd.DataFrame
+- load_demographics(file_path: str) -> pd.DataFrame
+- load_teaching_methods(file_path: str) -> pd.DataFrame
+- load_assessment_methods(file_path: str) -> pd.DataFrame
+- load_study_hours(file_path: str) -> pd.DataFrame
+- load_attendance(file_path: str) -> pd.DataFrame
+```
+
+### 2.3 Xây dựng Data Preprocessors
+**Thời gian ước tính: 4-5 ngày**
+
+#### 2.3.1 Module: `src/ml_clo/data/preprocessors.py`
+- [ ] Chuẩn hóa Student_ID, Subject_ID, Lecturer_ID
+- [ ] **CHUYỂN ĐỔI ĐIỂM HỆ 10 → HỆ 6** (công thức: CLO_6 = Score_10 / 10 × 6)
+- [ ] Làm sạch exam_score (loại bỏ invalid, chuyển float)
+- [ ] Xử lý missing values
+- [ ] Tạo biến Result (Pass ≥ 6, Fail < 6) - chỉ dùng cho analysis
+
+#### 2.3.2 Module: `src/ml_clo/data/encoders.py`
+- [ ] Mã hóa phương pháp giảng dạy: X → 1, others/NaN → 0
+- [ ] Mã hóa nhân khẩu học:
+  - Gender: binary encoding
+  - Birth place → region (Bắc/Trung/Nam)
+  - Ethnicity, religion → integer encoding
+- [ ] Mã hóa Student_ID, Lecturer_ID, Subject_ID (LabelEncoder hoặc hash)
+
+#### 2.3.3 Module: `src/ml_clo/data/validators.py`
+- [ ] Validate data types
+- [ ] Validate ranges (điểm 0-6, conduct_score 0-100, etc.)
+- [ ] Validate required fields
+- [ ] Check data consistency
+
+### 2.4 Xây dựng Data Merging Pipeline
+**Thời gian ước tính: 2-3 ngày**
+
+#### 2.4.1 Nhiệm vụ
+- [ ] Gộp tất cả bảng theo Student_ID, Subject_ID, year
+- [ ] Xử lý missing values sau khi merge
+- [ ] Tạo bảng training dataset cuối cùng
+- [ ] Lưu dataset đã xử lý (optional, để debug)
+
+---
+
+## 3. GIAI ĐOẠN 2: FEATURE ENGINEERING
+
+### 3.1 Xây dựng Feature Groups
+**Thời gian ước tính: 3-4 ngày**
+
+#### 3.1.1 Module: `src/ml_clo/features/feature_groups.py`
+Định nghĩa các nhóm feature theo sư phạm:
+- [ ] **A. Basic Information**: student_id_encoded, lecturer_encoded, subject_encoded
+- [ ] **B. Demographics**: gender_encoded, religion_encoded, birth_place_encoded, ethnicity_encoded
+- [ ] **C. Conduct Scores**: avg_conduct_score, latest_conduct_score, conduct_trend
+- [ ] **D. Self-Study**: study_hours_this_year, total_study_hours
+- [ ] **E. Academic History**: total_subjects, passed_subjects, pass_rate, avg_exam_score, recent_avg_score, improvement_trend
+- [ ] **F. Teaching & Assessment Methods**: features từ PPGDfull và PPDGfull
+
+#### 3.1.2 Module: `src/ml_clo/config/feature_config.py`
+- [ ] Định nghĩa feature names
+- [ ] Định nghĩa feature groups mapping
+- [ ] Feature importance thresholds
+
+### 3.2 Xây dựng Feature Builder
+**Thời gian ước tính: 5-6 ngày**
+
+#### 3.2.1 Module: `src/ml_clo/features/feature_builder.py`
+- [ ] Tính toán các feature aggregate:
+  - avg_conduct_score: trung bình điểm rèn luyện
+  - latest_conduct_score: điểm rèn luyện gần nhất
+  - conduct_trend: xu hướng (tăng/giảm/ổn định)
+  - total_subjects: tổng số môn đã học
+  - passed_subjects: số môn đã pass
+  - pass_rate: tỷ lệ pass
+  - avg_exam_score: điểm thi trung bình
+  - recent_avg_score: điểm trung bình gần đây (last N semesters)
+  - improvement_trend: xu hướng cải thiện
+- [ ] Tính toán attendance rate từ dữ liệu điểm danh
+- [ ] Tạo features từ phương pháp giảng dạy/đánh giá
+- [ ] Pipeline feature engineering có thể tái sử dụng
+
+---
+
+## 4. GIAI ĐOẠN 3: XÂY DỰNG MODEL
+
+### 4.1 Base Model Interface
+**Thời gian ước tính: 2 ngày**
+
+#### 4.1.1 Module: `src/ml_clo/models/base.py`
+- [ ] Abstract base class `BaseModel`
+- [ ] Interface: `train()`, `predict()`, `save()`, `load()`
+- [ ] Model versioning support
+- [ ] Logging integration
+
+### 4.2 Random Forest Model
+**Thời gian ước tính: 2-3 ngày**
+
+#### 4.2.1 Module: `src/ml_clo/models/random_forest.py`
+- [ ] Implement `RandomForestModel(BaseModel)`
+- [ ] Hyperparameters:
+  - n_estimators = 1000
+  - max_depth = 25
+  - random_state = 42
+- [ ] Training với validation split
+- [ ] Save/load model (joblib)
+
+### 4.3 Gradient Boosting Model
+**Thời gian ước tính: 2-3 ngày**
+
+#### 4.3.1 Module: `src/ml_clo/models/gradient_boosting.py`
+- [ ] Implement `GradientBoostingModel(BaseModel)`
+- [ ] Hyperparameters:
+  - n_estimators = 500
+  - max_depth = 12
+  - learning_rate = 0.03
+  - random_state = 42
+- [ ] Training với validation split
+- [ ] Save/load model (joblib)
+
+### 4.4 Ensemble Model
+**Thời gian ước tính: 2-3 ngày**
+
+#### 4.4.1 Module: `src/ml_clo/models/ensemble.py`
+- [ ] Implement `EnsembleModel(BaseModel)`
+- [ ] Weighted average của RF và GB
+- [ ] Weights dựa trên validation performance
+- [ ] Training pipeline cho ensemble
+
+### 4.5 Model Configuration
+**Thời gian ước tính: 1 ngày**
+
+#### 4.5.1 Module: `src/ml_clo/config/model_config.py`
+- [ ] Hyperparameters cho từng model
+- [ ] Model selection logic
+- [ ] Validation strategy
+
+---
+
+## 5. GIAI ĐOẠN 4: EVALUATION & METRICS
+
+### 5.1 Metrics Module
+**Thời gian ước tính: 2 ngày**
+
+#### 5.1.1 Module: `src/ml_clo/evaluation/metrics.py`
+- [ ] MAE (Mean Absolute Error)
+- [ ] RMSE (Root Mean Squared Error)
+- [ ] R² (R-squared)
+- [ ] Custom metrics cho CLO prediction
+
+### 5.2 Statistical Tests
+**Thời gian ước tính: 3-4 ngày**
+
+#### 5.2.1 Module: `src/ml_clo/evaluation/statistical_tests.py`
+- [ ] Pearson correlation analysis
+- [ ] T-test (giới tính)
+- [ ] ANOVA (vùng miền)
+- [ ] Distribution comparison (teaching methods)
+- [ ] Descriptive statistics
+
+---
+
+## 6. GIAI ĐOẠN 5: XAI IMPLEMENTATION
+
+### 6.1 SHAP Explainer
+**Thời gian ước tính: 3-4 ngày**
+
+#### 6.1.1 Module: `src/ml_clo/xai/shap_explainer.py`
+- [ ] Sử dụng `shap.TreeExplainer` cho tree-based models
+- [ ] Compute SHAP values cho individual prediction
+- [ ] Compute SHAP values cho batch prediction
+- [ ] Cache explainer để tối ưu performance
+
+### 6.2 SHAP Postprocessing
+**Thời gian ước tính: 4-5 ngày**
+
+#### 6.2.1 Module: `src/ml_clo/xai/shap_postprocess.py`
+- [ ] Filter SHAP values theo threshold (configurable)
+- [ ] Group SHAP values theo pedagogical categories:
+  - Tự học (Self-study)
+  - Chuyên cần (Attendance)
+  - Rèn luyện (Conduct)
+  - Học lực (Academic)
+  - Giảng dạy (Teaching)
+  - Đánh giá (Assessment)
+  - Cá nhân (Personal)
+- [ ] Normalize to percentage impact
+- [ ] Aggregate SHAP cho class-level analysis
+
+#### 6.2.2 Module: `src/ml_clo/config/xai_config.py`
+- [ ] SHAP threshold configuration
+- [ ] Feature grouping rules
+- [ ] Impact percentage calculation rules
+
+---
+
+## 7. GIAI ĐOẠN 6: REASONING & SOLUTIONS
+
+### 7.1 Reason Generation
+**Thời gian ước tính: 4-5 ngày**
+
+#### 7.1.1 Module: `src/ml_clo/reasoning/reason_generator.py`
+- [ ] Rule-based reason generation (KHÔNG dùng LLM)
+- [ ] Map từ XAI outputs → pedagogical reasons
+- [ ] Generate human-readable reason text
+- [ ] Support individual và class-level
+
+#### 7.1.2 Module: `src/ml_clo/reasoning/templates.py`
+- [ ] Reason templates cho từng nhóm nguyên nhân
+- [ ] Template cho individual analysis
+- [ ] Template cho class analysis
+- [ ] Language: tiếng Việt, sư phạm
+
+### 7.2 Solution Mapping
+**Thời gian ước tính: 3-4 ngày**
+
+#### 7.2.1 Module: `src/ml_clo/reasoning/solution_mapper.py`
+- [ ] Map reason_key → solutions
+- [ ] Context-aware (individual vs class)
+- [ ] Actionable solutions
+- [ ] Phù hợp bối cảnh giáo dục đại học
+
+---
+
+## 8. GIAI ĐOẠN 7: PIPELINES
+
+### 8.1 Training Pipeline
+**Thời gian ước tính: 4-5 ngày**
+
+#### 8.1.1 Module: `src/ml_clo/pipelines/train_pipeline.py`
+- [ ] Load và preprocess tất cả dữ liệu
+- [ ] Feature engineering
+- [ ] Train Random Forest
+- [ ] Train Gradient Boosting
+- [ ] Train Ensemble
+- [ ] Evaluate models
+- [ ] Save models với versioning
+- [ ] Log training metrics
+
+#### 8.1.2 Script: `scripts/train.py`
+- [ ] CLI interface (argparse)
+- [ ] Accept data paths
+- [ ] Accept model output path
+- [ ] Run training pipeline
+- [ ] Error handling và logging
+
+### 8.2 Prediction Pipeline
+**Thời gian ước tính: 4-5 ngày**
+
+#### 8.2.1 Module: `src/ml_clo/pipelines/predict_pipeline.py`
+- [ ] Load trained model
+- [ ] Load và preprocess student data
+- [ ] Feature engineering cho student
+- [ ] Predict CLO score
+- [ ] Compute SHAP values
+- [ ] Generate reasons và solutions
+- [ ] Return structured output
+
+#### 8.2.2 Script: `scripts/predict.py`
+- [ ] CLI interface
+- [ ] Accept student_id, subject_id, lecturer_id
+- [ ] Run prediction pipeline
+- [ ] Output JSON result
+
+### 8.3 Analysis Pipeline
+**Thời gian ước tính: 5-6 ngày**
+
+#### 8.3.1 Module: `src/ml_clo/pipelines/analysis_pipeline.py`
+- [ ] Load trained model
+- [ ] Load class data (all students in subject)
+- [ ] Predict cho từng student
+- [ ] Aggregate SHAP values
+- [ ] Generate class-level reasons và solutions
+- [ ] **Lưu trữ dữ liệu CLO thực tế** (nếu có) cho retraining
+- [ ] Return structured output
+
+#### 8.3.2 Script: `scripts/analyze_class.py`
+- [ ] CLI interface
+- [ ] Accept subject_id, lecturer_id
+- [ ] Run analysis pipeline
+- [ ] Output JSON result
+
+---
+
+## 9. GIAI ĐOẠN 8: OUTPUT SCHEMAS
+
+### 9.1 Output Schemas
+**Thời gian ước tính: 2-3 ngày**
+
+#### 9.1.1 Module: `src/ml_clo/outputs/schemas.py`
+- [ ] Pydantic models hoặc dataclasses
+- [ ] IndividualAnalysisOutput schema
+- [ ] ClassAnalysisOutput schema
+- [ ] JSON-serializable
+- [ ] Backend-friendly format
+
+---
+
+## 10. GIAI ĐOẠN 9: UTILITIES & CONFIGURATION
+
+### 10.1 Utilities
+**Thời gian ước tính: 2-3 ngày**
+
+#### 10.1.1 Module: `src/ml_clo/utils/logger.py`
+- [ ] Structured logging configuration
+- [ ] Log levels: DEBUG, INFO, WARNING, ERROR, CRITICAL
+- [ ] Hash sensitive data (student IDs) trong logs
+
+#### 10.1.2 Module: `src/ml_clo/utils/exceptions.py`
+- [ ] Custom exceptions
+- [ ] DataValidationError
+- [ ] ModelLoadError
+- [ ] PredictionError
+
+#### 10.1.3 Module: `src/ml_clo/utils/math_utils.py`
+- [ ] Math utilities
+- [ ] Score conversion functions
+
+#### 10.1.4 Module: `src/ml_clo/utils/io_utils.py`
+- [ ] File I/O utilities
+- [ ] Model save/load helpers
+
+### 10.2 Configuration
+**Thời gian ước tính: 2 ngày**
+
+#### 10.2.1 Module: `src/ml_clo/config/feature_config.py`
+- [ ] Feature definitions
+- [ ] Feature groups
+
+#### 10.2.2 Module: `src/ml_clo/config/model_config.py`
+- [ ] Model hyperparameters
+- [ ] Model selection
+
+#### 10.2.3 Module: `src/ml_clo/config/xai_config.py`
+- [ ] SHAP thresholds
+- [ ] Grouping rules
+
+---
+
+## 11. GIAI ĐOẠN 10: TESTING
+
+### 11.1 Unit Tests
+**Thời gian ước tính: 5-6 ngày**
+
+#### 11.1.1 Test Data Module
+- [ ] `tests/unit/test_data/test_loaders.py`
+- [ ] `tests/unit/test_data/test_preprocessors.py`
+- [ ] `tests/unit/test_data/test_encoders.py`
+- [ ] `tests/unit/test_data/test_validators.py`
+
+#### 11.1.2 Test Features Module
+- [ ] `tests/unit/test_features/test_feature_builder.py`
+- [ ] `tests/unit/test_features/test_feature_groups.py`
+
+#### 11.1.3 Test Models Module
+- [ ] `tests/unit/test_models/test_random_forest.py`
+- [ ] `tests/unit/test_models/test_gradient_boosting.py`
+- [ ] `tests/unit/test_models/test_ensemble.py`
+
+#### 11.1.4 Test XAI Module
+- [ ] `tests/unit/test_xai/test_shap_explainer.py`
+- [ ] `tests/unit/test_xai/test_shap_postprocess.py`
+
+#### 11.1.5 Test Fixtures
+- [ ] `tests/fixtures/`: Synthetic data generators
+- [ ] Deterministic và reproducible
+
+### 11.2 Integration Tests
+**Thời gian ước tính: 4-5 ngày**
+
+#### 11.2.1 Test Pipelines
+- [ ] `tests/integration/test_pipelines/test_train_pipeline.py`
+- [ ] `tests/integration/test_pipelines/test_predict_pipeline.py`
+- [ ] `tests/integration/test_pipelines/test_analysis_pipeline.py`
+- [ ] `tests/integration/test_pipelines/test_model_save_load.py`
+
+### 11.3 Test Coverage
+- [ ] Aim for >80% code coverage
+- [ ] Critical paths >90% coverage
+- [ ] Use pytest
+
+---
+
+## 12. GIAI ĐOẠN 11: BUILD & DISTRIBUTION
+
+### 12.1 Project Setup
+**Thời gian ước tính: 2-3 ngày**
+
+#### 12.1.1 Files to create
+- [ ] `pyproject.toml`: Build configuration
+- [ ] `requirements.txt`: Production dependencies
+- [ ] `requirements-dev.txt`: Development dependencies
+- [ ] `README.md`: Usage examples
+- [ ] `LICENSE`: License file
+
+#### 12.1.2 Requirements
+- [ ] Python >= 3.10
+- [ ] pandas, numpy
+- [ ] scikit-learn
+- [ ] shap (TreeExplainer only)
+- [ ] matplotlib/seaborn (optional, visualization)
+- [ ] joblib (model serialization)
+- [ ] pytest (testing)
+- [ ] pydantic (optional, for schemas)
+
+### 12.2 Installation
+- [ ] `pip install -e .` should work
+- [ ] No hard-coded paths
+- [ ] Environment variables for configuration
+
+---
+
+## 13. TIMELINE TỔNG QUAN
+
+### Phase 1: Data Preparation (Tuần 1-2)
+- Data analysis và loaders
+- Preprocessors và encoders
+- Data merging
+
+### Phase 2: Feature Engineering (Tuần 3)
+- Feature groups
+- Feature builder
+
+### Phase 3: Model Development (Tuần 4-5)
+- Base model
+- Random Forest
+- Gradient Boosting
+- Ensemble
+
+### Phase 4: Evaluation (Tuần 5)
+- Metrics
+- Statistical tests
+
+### Phase 5: XAI (Tuần 6-7)
+- SHAP explainer
+- SHAP postprocessing
+
+### Phase 6: Reasoning (Tuần 7-8)
+- Reason generation
+- Solution mapping
+
+### Phase 7: Pipelines (Tuần 8-9)
+- Training pipeline
+- Prediction pipeline
+- Analysis pipeline
+
+### Phase 8: Output & Utils (Tuần 9)
+- Output schemas
+- Utilities
+- Configuration
+
+### Phase 9: Testing (Tuần 10-11)
+- Unit tests
+- Integration tests
+
+### Phase 10: Build & Polish (Tuần 11-12)
+- Project setup
+- Documentation
+- Final testing
+
+**Tổng thời gian ước tính: 12 tuần (3 tháng)**
+
+---
+
+## 14. CÁC ĐIỂM QUAN TRỌNG CẦN LƯU Ý
+
+### 14.1 Score Conversion (CRITICAL)
+- **TẤT CẢ điểm thi hệ 10 PHẢI chuyển sang hệ 6 trước khi training**
+- Công thức: `CLO_6 = Score_10 / 10 × 6`
+- Model chỉ nhìn thấy điểm hệ 6
+- Dữ liệu tương lai từ hệ thống sẽ là hệ 6 (không cần convert)
+
+### 14.2 Data Storage for Retraining
+- Khi phân tích lớp, **PHẢI lưu lại điểm CLO thực tế** (hệ 6)
+- Lưu: student_id, subject_id, lecturer_id, clo_score, features, semester/year
+- Dùng cho retraining trong tương lai
+
+### 14.3 Model Versioning
+- Mỗi model phải có version (v{MAJOR}.{MINOR}.{PATCH})
+- Lưu metadata với model
+- Support load model by version
+
+### 14.4 Reproducibility
+- Fixed random seeds (random_state=42)
+- Deterministic preprocessing
+- Log all random seeds used
+
+### 14.5 No Forbidden Actions
+- ❌ Không dùng notebook (.ipynb) trong core code
+- ❌ Không dùng LLM cho reason generation
+- ❌ Không có print() hoặc input()
+- ❌ Không hard-code paths hoặc credentials
+- ❌ Không skip error handling
+
+### 14.6 Code Quality
+- Type hints cho tất cả functions
+- Docstrings (Google style) cho public APIs
+- PEP 8 compliance
+- Maximum line length: 100 characters
+
+---
+
+## 15. DEPENDENCIES & PREREQUISITES
+
+### 15.1 Data Files
+- Tất cả file Excel trong `data/` directory
+- Đảm bảo file paths đúng
+
+### 15.2 Python Environment
+- Python >= 3.10
+- Virtual environment recommended
+
+### 15.3 External Libraries
+- pandas >= 1.5.0
+- numpy >= 1.23.0
+- scikit-learn >= 1.2.0
+- shap >= 0.41.0
+- joblib >= 1.2.0
+- pytest >= 7.0.0
+
+---
+
+## 16. NEXT STEPS
+
+1. **Bắt đầu với Giai đoạn 1**: Phân tích và chuẩn bị dữ liệu
+2. **Tạo project structure**: Tạo tất cả thư mục và file __init__.py
+3. **Implement từng module theo thứ tự**: Data → Features → Models → XAI → Pipelines
+4. **Test liên tục**: Viết test song song với implementation
+5. **Documentation**: Cập nhật docstrings và README
+
+---
+
+## 17. RISKS & MITIGATION
+
+### 17.1 Data Quality Issues
+- **Risk**: Missing data, inconsistent formats
+- **Mitigation**: Robust validators, clear error messages
+
+### 17.2 Model Performance
+- **Risk**: Model không đạt accuracy mong muốn
+- **Mitigation**: Tune hyperparameters, feature engineering, ensemble
+
+### 17.3 XAI Interpretation
+- **Risk**: SHAP values khó interpret
+- **Mitigation**: Proper grouping, normalization, clear documentation
+
+### 17.4 Integration Issues
+- **Risk**: Khó tích hợp vào backend
+- **Mitigation**: Clean APIs, JSON-serializable outputs, proper error handling
+
+---
+
+**Kế hoạch này là living document, sẽ được cập nhật khi cần thiết.**
+
+
