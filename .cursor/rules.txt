@@ -20,6 +20,16 @@ Scientific background, data assumptions, and model logic are defined in `.cursor
 - `docs/model_requirements.md`: Model requirements and specifications
 - `docs/data_model.md`: Data model definitions and structure
 
+**Development Plan**: The detailed implementation plan and roadmap for building the model is documented in `plan.txt` at the project root. This plan includes:
+- 17 development phases with detailed tasks and checklists
+- Timeline estimates (12 weeks total)
+- Module-by-module implementation guide
+- Dependencies and prerequisites
+- Risk mitigation strategies
+- Critical implementation notes (score conversion, data storage, model versioning)
+
+When implementing features, Cursor AI should refer to `plan.txt` to understand the development sequence, priorities, and specific requirements for each module.
+
 ## 2. Technology Stack
 
 - **Language**: Python >= 3.10

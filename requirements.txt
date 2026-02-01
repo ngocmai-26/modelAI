@@ -1,0 +1,8 @@
+# Core dependencies for ML CLO library
+pandas>=1.5.0
+numpy>=1.23.0
+scikit-learn>=1.2.0
+shap>=0.41.0
+joblib>=1.2.0
+openpyxl>=3.0.0  # For reading Excel files
+
