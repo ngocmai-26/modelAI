@@ -6,3 +6,6 @@ shap>=0.41.0
 joblib>=1.2.0
 openpyxl>=3.0.0  # For reading Excel files
 
+# Testing (optional, for development)
+pytest>=7.0.0
+pytest-cov>=4.0.0
