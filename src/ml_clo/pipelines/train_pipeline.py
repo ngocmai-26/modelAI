@@ -439,6 +439,15 @@ class TrainingPipeline:
         # Step 6: Evaluate model
         metrics = self.evaluate(model, X_test, y_test)
 
+        # Merge train/val metrics from model for CLI and API
+        tm = getattr(model, "training_metrics", {}) or {}
+        metrics["train_mae"] = tm.get("ensemble_train_mae")
+        metrics["train_rmse"] = tm.get("ensemble_train_rmse")
+        metrics["train_r2"] = tm.get("ensemble_train_r2")
+        metrics["val_mae"] = tm.get("ensemble_val_mae")
+        metrics["val_rmse"] = tm.get("ensemble_val_rmse")
+        metrics["val_r2"] = tm.get("ensemble_val_r2")
+
         # Step 7: Save model
         self.save_model(model, output_path)
 

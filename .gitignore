@@ -1,4 +1,11 @@
 **/.DS_Store
+.venv
 venv
 **/__pycache__
 models/*
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+*.egg

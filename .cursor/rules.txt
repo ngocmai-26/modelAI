@@ -50,6 +50,17 @@ When implementing features, Cursor AI should refer to `plan.txt` to understand t
 
 All ML code must be written in pure Python modules.
 
+### 2.1 Development Environment (venv)
+
+- **Luôn dùng virtual environment của dự án**: `.venv` tại thư mục gốc project.
+- Tạo venv: `python3 -m venv .venv` hoặc `make venv`
+- Kích hoạt: `source .venv/bin/activate` (Linux/macOS) hoặc `.venv\Scripts\activate` (Windows)
+- Chạy lệnh (pip, pytest, scripts) chỉ khi đã activate `.venv`.
+- **Khi chạy lệnh trong terminal (Cursor hoặc local)**: dùng interpreter/pip/pytest từ `.venv`, ví dụ:
+  - `.venv/bin/python`, `.venv/bin/pip`, `.venv/bin/pytest` (Linux/macOS)
+  - Hoặc dùng `make install`, `make test` (Makefile gọi sẵn .venv).
+- Tránh dùng system Python/pip khi làm việc trong project.
+
 ## 3. Project Structure Rules
 
 The project MUST follow this exact structure:
