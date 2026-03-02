@@ -48,7 +48,7 @@ def test_prediction_pipeline():
     print("=" * 80)
 
     # Check if model exists
-    model_path = "models/test_ensemble_model.joblib"
+    model_path = "models/model.joblib"
     if not Path(model_path).exists():
         print(f"⚠ Model not found at {model_path}, running training first...")
         test_training_pipeline()
@@ -95,7 +95,7 @@ def test_analysis_pipeline():
     print("=" * 80)
 
     # Check if model exists
-    model_path = "models/test_ensemble_model.joblib"
+    model_path = "models/model.joblib"
     if not Path(model_path).exists():
         print(f"⚠ Model not found at {model_path}, running training first...")
         test_training_pipeline()
@@ -165,7 +165,7 @@ def test_with_real_ids():
     print(f"  Lecturer ID: {lecturer_id}")
 
     # Check if model exists
-    model_path = "models/test_ensemble_model.joblib"
+    model_path = "models/model.joblib"
     if not Path(model_path).exists():
         print(f"\n⚠ Model not found, running training first...")
         test_training_pipeline()

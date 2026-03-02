@@ -164,15 +164,18 @@ pipeline.run(
     output_path="models/model.joblib",
 )
 
-# Dự đoán cá nhân
-pred_pipeline = PredictionPipeline(model_path="models/model.joblib")
+# Dự đoán cá nhân — khuyến nghị: truyền data paths khi khởi tạo, sau đó chỉ cần ID
+pred_pipeline = PredictionPipeline(
+    model_path="models/model.joblib",
+    exam_scores_path="data/DiemTong.xlsx",  # (và các path khác nếu có)
+)
 result = pred_pipeline.predict(
     student_id="19050006",
     subject_id="INF0823",
     lecturer_id="90316",
-    exam_scores_path="data/DiemTong.xlsx",
 )
 # result: IndividualAnalysisOutput — dùng result.to_dict() hoặc result.to_json() để trả API
+# (Nếu không cache: có thể gọi predict(..., exam_scores_path="...") mỗi lần.)
 
 # Phân tích lớp
 analysis_pipeline = AnalysisPipeline(model_path="models/model.joblib")

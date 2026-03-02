@@ -11,7 +11,7 @@ This module provides a complete prediction pipeline that integrates:
 """
 
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import numpy as np
 import pandas as pd
@@ -41,16 +41,40 @@ logger = get_logger(__name__)
 
 
 class PredictionPipeline:
-    """Prediction pipeline for individual student CLO prediction."""
+    """Prediction pipeline for individual student CLO prediction.
 
-    def __init__(self, model_path: str):
+    Model đã train chỉ nhận **feature vector** (khoảng 76 số) → điểm CLO. Để có feature
+    vector cho một sinh viên cần dữ liệu gốc (điểm thi, rèn luyện, nhân khẩu, ...). Có hai cách:
+
+    1. **Truyền data paths khi khởi tạo**: data được load và cache một lần, sau đó
+       predict(student_id, subject_id, lecturer_id) không cần path.
+    2. **Truyền paths vào predict() mỗi lần** (cách cũ, vẫn hỗ trợ).
+    """
+
+    def __init__(
+        self,
+        model_path: str,
+        exam_scores_path: Optional[str] = None,
+        conduct_scores_path: Optional[str] = None,
+        demographics_path: Optional[str] = None,
+        teaching_methods_path: Optional[str] = None,
+        assessment_methods_path: Optional[str] = None,
+        study_hours_path: Optional[str] = None,
+    ):
         """Initialize prediction pipeline.
 
         Args:
-            model_path: Path to trained model file
+            model_path: Path to trained model file (bắt buộc).
+            exam_scores_path: Path file điểm thi. Nếu truyền, data sẽ được load và cache;
+                sau đó predict() chỉ cần student_id, subject_id, lecturer_id.
+            conduct_scores_path: Path điểm rèn luyện (tùy chọn).
+            demographics_path: Path nhân khẩu (tùy chọn).
+            teaching_methods_path: Path PPGD (tùy chọn).
+            assessment_methods_path: Path PPDG (tùy chọn).
+            study_hours_path: Path tự học (tùy chọn).
 
         Raises:
-            ModelLoadError: If model cannot be loaded
+            ModelLoadError: Nếu không tìm thấy file model.
         """
         self.model_path = Path(model_path)
         if not self.model_path.exists():
@@ -60,6 +84,46 @@ class PredictionPipeline:
         self.explainer: Optional[EnsembleSHAPExplainer] = None
         self.label_encoders: Dict[str, LabelEncoder] = {}
         self.feature_names: Optional[list] = None
+        self._data_cache: Optional[Dict[str, Any]] = None
+
+        if exam_scores_path:
+            self.load_data_cache(
+                exam_scores_path=exam_scores_path,
+                conduct_scores_path=conduct_scores_path,
+                demographics_path=demographics_path,
+                teaching_methods_path=teaching_methods_path,
+                assessment_methods_path=assessment_methods_path,
+                study_hours_path=study_hours_path,
+            )
+
+    def load_data_cache(
+        self,
+        exam_scores_path: str,
+        conduct_scores_path: Optional[str] = None,
+        demographics_path: Optional[str] = None,
+        teaching_methods_path: Optional[str] = None,
+        assessment_methods_path: Optional[str] = None,
+        study_hours_path: Optional[str] = None,
+    ) -> None:
+        """Load và cache toàn bộ data một lần. Sau đó predict() chỉ cần student_id, subject_id, lecturer_id."""
+        logger.info("Loading and caching data for prediction (one-time)")
+        exam_df = load_exam_scores(exam_scores_path)
+        exam_df = preprocess_exam_scores(exam_df, convert_to_clo=True, create_result=False)
+        cache: Dict[str, Any] = {"exam_scores": exam_df}
+        if conduct_scores_path and Path(conduct_scores_path).exists():
+            cache["conduct_scores"] = load_conduct_scores(conduct_scores_path)
+        if demographics_path and Path(demographics_path).exists():
+            cache["demographics"] = load_demographics(demographics_path)
+        if teaching_methods_path and Path(teaching_methods_path).exists():
+            tm_df = load_teaching_methods(teaching_methods_path)
+            cache["teaching_methods"] = encode_teaching_methods(tm_df)
+        if assessment_methods_path and Path(assessment_methods_path).exists():
+            em_df = load_assessment_methods(assessment_methods_path)
+            cache["assessment_methods"] = encode_assessment_methods(em_df)
+        if study_hours_path and Path(study_hours_path).exists():
+            cache["study_hours"] = load_study_hours(study_hours_path)
+        self._data_cache = cache
+        logger.info("Data cache ready")
 
     def load_model(self) -> EnsembleModel:
         """Load trained model.
@@ -91,7 +155,7 @@ class PredictionPipeline:
         student_id: str,
         subject_id: str,
         lecturer_id: str,
-        exam_scores_path: str,
+        exam_scores_path: Optional[str] = None,
         conduct_scores_path: Optional[str] = None,
         demographics_path: Optional[str] = None,
         teaching_methods_path: Optional[str] = None,
@@ -100,34 +164,45 @@ class PredictionPipeline:
     ) -> pd.DataFrame:
         """Load and prepare data for a single student.
 
-        Args:
-            student_id: Student ID
-            subject_id: Subject ID
-            lecturer_id: Lecturer ID
-            exam_scores_path: Path to exam scores file
-            conduct_scores_path: Path to conduct scores file (optional)
-            demographics_path: Path to demographics file (optional)
-            teaching_methods_path: Path to teaching methods file (optional)
-            assessment_methods_path: Path to assessment methods file (optional)
-            study_hours_path: Path to study hours file (optional)
-
-        Returns:
-            DataFrame with student data ready for prediction
+        Nếu đã gọi load_data_cache() (hoặc truyền paths khi khởi tạo), có thể bỏ qua các path.
         """
         logger.info(f"Loading data for student {student_id}, subject {subject_id}")
 
-        # Load all data sources (same as training)
-        # Imports are already at top of file
-
-        exam_df = load_exam_scores(exam_scores_path)
-        exam_df = preprocess_exam_scores(exam_df, convert_to_clo=True, create_result=False)
-
-        # Filter for specific student, subject, lecturer
-        student_data = exam_df[
-            (exam_df["Student_ID"] == student_id)
-            & (exam_df["Subject_ID"] == subject_id)
-            & (exam_df["Lecturer_ID"] == lecturer_id)
-        ].copy()
+        if self._data_cache is not None:
+            exam_df = self._data_cache["exam_scores"]
+            student_data = exam_df[
+                (exam_df["Student_ID"] == student_id)
+                & (exam_df["Subject_ID"] == subject_id)
+                & (exam_df["Lecturer_ID"] == lecturer_id)
+            ].copy()
+            data = dict(self._data_cache)
+            data["exam_scores"] = student_data
+        else:
+            if not exam_scores_path:
+                raise ValueError(
+                    "No data cache and no exam_scores_path. "
+                    "Pass exam_scores_path at init or to predict()."
+                )
+            exam_df = load_exam_scores(exam_scores_path)
+            exam_df = preprocess_exam_scores(exam_df, convert_to_clo=True, create_result=False)
+            student_data = exam_df[
+                (exam_df["Student_ID"] == student_id)
+                & (exam_df["Subject_ID"] == subject_id)
+                & (exam_df["Lecturer_ID"] == lecturer_id)
+            ].copy()
+            data = {"exam_scores": student_data}
+            if conduct_scores_path and Path(conduct_scores_path).exists():
+                data["conduct_scores"] = load_conduct_scores(conduct_scores_path)
+            if demographics_path and Path(demographics_path).exists():
+                data["demographics"] = load_demographics(demographics_path)
+            if teaching_methods_path and Path(teaching_methods_path).exists():
+                tm_df = load_teaching_methods(teaching_methods_path)
+                data["teaching_methods"] = encode_teaching_methods(tm_df)
+            if assessment_methods_path and Path(assessment_methods_path).exists():
+                em_df = load_assessment_methods(assessment_methods_path)
+                data["assessment_methods"] = encode_assessment_methods(em_df)
+            if study_hours_path and Path(study_hours_path).exists():
+                data["study_hours"] = load_study_hours(study_hours_path)
 
         if len(student_data) == 0:
             raise ValueError(
@@ -135,27 +210,7 @@ class PredictionPipeline:
                 f"subject_id={subject_id}, lecturer_id={lecturer_id}"
             )
 
-        # Load other data sources
-        data = {"exam_scores": student_data}
-
-        if conduct_scores_path and Path(conduct_scores_path).exists():
-            data["conduct_scores"] = load_conduct_scores(conduct_scores_path)
-
-        if demographics_path and Path(demographics_path).exists():
-            data["demographics"] = load_demographics(demographics_path)
-
-        if teaching_methods_path and Path(teaching_methods_path).exists():
-            tm_df = load_teaching_methods(teaching_methods_path)
-            data["teaching_methods"] = encode_teaching_methods(tm_df)
-
-        if assessment_methods_path and Path(assessment_methods_path).exists():
-            em_df = load_assessment_methods(assessment_methods_path)
-            data["assessment_methods"] = encode_assessment_methods(em_df)
-
-        if study_hours_path and Path(study_hours_path).exists():
-            data["study_hours"] = load_study_hours(study_hours_path)
-
-        # Merge and build features (same as training)
+        full_exam_df = self._data_cache["exam_scores"] if self._data_cache else exam_df
         training_df = create_training_dataset(
             exam_df=student_data,
             conduct_df=data.get("conduct_scores"),
@@ -164,22 +219,15 @@ class PredictionPipeline:
             assessment_methods_df=data.get("assessment_methods"),
             study_hours_df=data.get("study_hours"),
             target_column="exam_score",
-            drop_missing_target=False,  # Don't drop, we need to predict
+            drop_missing_target=False,
         )
-
-        # Build aggregate features (need full history for features)
-        full_exam_df = load_exam_scores(exam_scores_path)
-        full_exam_df = preprocess_exam_scores(full_exam_df, convert_to_clo=True, create_result=False)
-
         training_df = build_all_features(
             training_df,
             conduct_history_df=data.get("conduct_scores"),
-            exam_history_df=full_exam_df,  # Use full history for features
+            exam_history_df=full_exam_df,
             study_hours_df=data.get("study_hours"),
         )
-
         logger.info(f"Student data prepared: {len(training_df)} records")
-
         return training_df
 
     def prepare_features(
@@ -271,7 +319,7 @@ class PredictionPipeline:
         student_id: str,
         subject_id: str,
         lecturer_id: str,
-        exam_scores_path: str,
+        exam_scores_path: Optional[str] = None,
         conduct_scores_path: Optional[str] = None,
         demographics_path: Optional[str] = None,
         teaching_methods_path: Optional[str] = None,
@@ -280,31 +328,36 @@ class PredictionPipeline:
     ) -> IndividualAnalysisOutput:
         """Predict CLO score and generate explanation for a student.
 
+        Nếu đã truyền data paths khi khởi tạo (hoặc gọi load_data_cache()), chỉ cần:
+        predict(student_id=..., subject_id=..., lecturer_id=...).
+
         Args:
             student_id: Student ID
             subject_id: Subject ID
             lecturer_id: Lecturer ID
-            exam_scores_path: Path to exam scores file
-            conduct_scores_path: Path to conduct scores file (optional)
-            demographics_path: Path to demographics file (optional)
-            teaching_methods_path: Path to teaching methods file (optional)
-            assessment_methods_path: Path to assessment methods file (optional)
-            study_hours_path: Path to study hours file (optional)
+            exam_scores_path: Path file điểm thi (bỏ qua nếu đã cache data khi init)
+            conduct_scores_path: Path điểm rèn luyện (optional)
+            demographics_path: Path nhân khẩu (optional)
+            teaching_methods_path: Path PPGD (optional)
+            assessment_methods_path: Path PPDG (optional)
+            study_hours_path: Path tự học (optional)
 
         Returns:
             IndividualAnalysisOutput with prediction and explanation
         """
         logger.info(f"Predicting CLO score for student {student_id}")
 
-        # Load model if not already loaded
         if self.model is None:
             self.load_model()
-
-        # Initialize explainer if not already initialized
         if self.explainer is None:
             self.explainer = EnsembleSHAPExplainer(self.model, cache_explainer=True)
 
-        # Load student data
+        if self._data_cache is None and exam_scores_path is None:
+            raise ValueError(
+                "No data cache. Pass exam_scores_path (and optional paths) at init: "
+                "PredictionPipeline(model_path, exam_scores_path='...') or to predict()."
+            )
+
         student_df = self.load_student_data(
             student_id=student_id,
             subject_id=subject_id,
