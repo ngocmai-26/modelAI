@@ -298,7 +298,7 @@ def main():
             print("\nTop Common Reasons:")
             for i, reason in enumerate(result.common_reasons[:3], 1):
                 print(f"  {i}. {reason.reason_key}: {reason.reason_text[:80]}...")
-                print(f"     Impact: {reason.impact_percentage:.1f}%")
+                print(f"     Impact: {reason.average_impact_percentage:.1f}%")
                 print(f"     Affected students: {reason.affected_students_count}")
         print("=" * 80)
 

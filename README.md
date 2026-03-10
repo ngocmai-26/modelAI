@@ -131,7 +131,12 @@ python scripts/analyze_class.py \
   --model models/model.joblib \
   --subject-id INF0823 \
   --lecturer-id 90316 \
-  --exam-scores data/DiemTong.xlsx
+  --exam-scores data/DiemTong.xlsx \
+  --conduct-scores data/diemrenluyen.xlsx \
+  --demographics data/nhankhau.xlsx \
+  --teaching-methods data/PPGDfull.xlsx \
+  --assessment-methods data/PPDGfull.xlsx \
+  --study-hours data/tuhoc.xlsx \
 ```
 
 Có thể thêm `--actual-scores` để lưu điểm thực cho retraining. Output: `ClassAnalysisOutput`.
