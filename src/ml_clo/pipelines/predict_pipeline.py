@@ -170,10 +170,14 @@ class PredictionPipeline:
 
         if self._data_cache is not None:
             exam_df = self._data_cache["exam_scores"]
+            # Normalize types: Student_ID is int64, Subject_ID/Lecturer_ID are str
+            _sid = int(student_id) if isinstance(student_id, str) and student_id.isdigit() else student_id
+            _subj = str(subject_id).strip()
+            _lec = str(lecturer_id).strip()
             student_data = exam_df[
-                (exam_df["Student_ID"] == student_id)
-                & (exam_df["Subject_ID"] == subject_id)
-                & (exam_df["Lecturer_ID"] == lecturer_id)
+                (exam_df["Student_ID"] == _sid)
+                & (exam_df["Subject_ID"] == _subj)
+                & (exam_df["Lecturer_ID"] == _lec)
             ].copy()
             data = dict(self._data_cache)
             data["exam_scores"] = student_data
@@ -185,10 +189,13 @@ class PredictionPipeline:
                 )
             exam_df = load_exam_scores(exam_scores_path)
             exam_df = preprocess_exam_scores(exam_df, convert_to_clo=True, create_result=False)
+            _sid = int(student_id) if isinstance(student_id, str) and student_id.isdigit() else student_id
+            _subj = str(subject_id).strip()
+            _lec = str(lecturer_id).strip()
             student_data = exam_df[
-                (exam_df["Student_ID"] == student_id)
-                & (exam_df["Subject_ID"] == subject_id)
-                & (exam_df["Lecturer_ID"] == lecturer_id)
+                (exam_df["Student_ID"] == _sid)
+                & (exam_df["Subject_ID"] == _subj)
+                & (exam_df["Lecturer_ID"] == _lec)
             ].copy()
             data = {"exam_scores": student_data}
             if conduct_scores_path and Path(conduct_scores_path).exists():

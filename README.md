@@ -119,7 +119,12 @@ python scripts/predict.py \
   --student-id 19050006 \
   --subject-id INF0823 \
   --lecturer-id 90316 \
-  --exam-scores data/DiemTong.xlsx
+  --exam-scores data/DiemTong.xlsx \
+  --conduct-scores data/diemrenluyen.xlsx \
+  --demographics data/nhankhau.xlsx \
+  --teaching-methods data/PPGDfull.xlsx \
+  --assessment-methods data/PPDGfull.xlsx \
+  --study-hours data/tuhoc.xlsx
 ```
 
 Output JSON: `predicted_clo`, lý do, giải pháp (theo schema `IndividualAnalysisOutput`).
