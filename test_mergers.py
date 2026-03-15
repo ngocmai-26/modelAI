@@ -20,6 +20,8 @@ from ml_clo.data.loaders import (
     load_teaching_methods,
 )
 from ml_clo.data.mergers import (
+    LECTURER_PLACEHOLDER,
+    create_student_record_from_ids,
     create_training_dataset,
     merge_all_data_sources,
     merge_assessment_methods,
@@ -33,6 +35,50 @@ from ml_clo.data.preprocessors import preprocess_exam_scores
 from ml_clo.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def test_create_student_record_from_ids():
+    """Test create_student_record_from_ids (yêu cầu mới: SV/môn/GV không cần có trong DiemTong)."""
+    print("\n" + "=" * 80)
+    print("Testing create_student_record_from_ids()")
+    print("=" * 80)
+
+    # Minimal test without data files
+    result = create_student_record_from_ids(
+        student_id="19050006",
+        subject_id="INF0823",
+        lecturer_id="90316",
+    )
+    assert len(result) == 1
+    assert result["Student_ID"].iloc[0] == 19050006
+    assert result["Subject_ID"].iloc[0] == "INF0823"
+    assert result["Lecturer_ID"].iloc[0] == "90316"
+    assert result["year"].iloc[0] == 2024
+    assert pd.isna(result["exam_score"].iloc[0])
+    print("  ✓ Basic record created")
+
+    # Lecturer placeholder when empty
+    result2 = create_student_record_from_ids(
+        student_id="19050006",
+        subject_id="INF0823",
+        lecturer_id="",
+    )
+    assert result2["Lecturer_ID"].iloc[0] == LECTURER_PLACEHOLDER
+    print("  ✓ Lecturer placeholder used when empty")
+
+    # With demographics
+    demo_df = pd.DataFrame([{"Student_ID": 19050006, "Gender": 1}])
+    result3 = create_student_record_from_ids(
+        student_id="19050006",
+        subject_id="INF0823",
+        lecturer_id="90316",
+        demographics_df=demo_df,
+    )
+    assert "Gender" in result3.columns
+    assert result3["Gender"].iloc[0] == 1
+    print("  ✓ Demographics merged")
+
+    return True
 
 
 def test_merge_exam_and_conduct_scores():
@@ -323,6 +369,7 @@ def main():
     results = []
 
     try:
+        results.append(("create_student_record_from_ids", test_create_student_record_from_ids()))
         results.append(("merge_exam_and_conduct_scores", test_merge_exam_and_conduct_scores()))
         results.append(("merge_demographics", test_merge_demographics()))
         results.append(("merge_teaching_methods", test_merge_teaching_methods()))

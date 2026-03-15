@@ -130,6 +130,18 @@ def test_individual_analysis_output():
     assert len(output_from_dict.reasons) == 1
     assert output_from_dict.reasons[0].reason_key == "Học lực"
 
+    # Test actual_clo_score (yêu cầu mới: môn đã đỗ)
+    output_with_actual = IndividualAnalysisOutput.from_explanation_dict(
+        explanation_dict,
+        student_id="SV001",
+        subject_id="SUB001",
+        actual_clo_score=4.2,
+    )
+    assert output_with_actual.actual_clo_score == 4.2
+    assert output_with_actual.predicted_clo_score == 4.80  # model prediction
+    d = output_with_actual.to_dict()
+    assert "actual_clo_score" in d and d["actual_clo_score"] == 4.2
+
     print("✓ IndividualAnalysisOutput schema test passed")
     return True
 

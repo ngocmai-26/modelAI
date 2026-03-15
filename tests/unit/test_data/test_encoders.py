@@ -12,29 +12,20 @@ from ml_clo.data.encoders import (
 
 
 class TestEncodeGender:
-    """Test encode_gender function."""
+    """Test encode_gender function (encoder expects numeric 0/1 input)."""
 
     def test_encode_gender_success(self):
         """Test successful gender encoding."""
-        df = pd.DataFrame({
-            "Gender": ["M", "F", "Male", "Female", "Nam", "Nữ"],
-        })
-
+        df = pd.DataFrame({"Gender": [1, 0, 1, 0, 1, 0]})
         result = encode_gender(df)
-
-        assert "Gender_encoded" in result.columns
-        assert result["Gender_encoded"].dtype in [int, "int64"]
+        assert "Gender" in result.columns
+        assert result["Gender"].dtype in [int, "int64", "int32"]
 
     def test_encode_gender_binary(self):
         """Test binary encoding."""
-        df = pd.DataFrame({
-            "Gender": ["M", "F"],
-        })
-
+        df = pd.DataFrame({"Gender": [1, 0]})
         result = encode_gender(df)
-
-        # Should have binary values (0 or 1)
-        assert set(result["Gender_encoded"].unique()).issubset({0, 1})
+        assert set(result["Gender"].unique()).issubset({0, 1})
 
 
 class TestEncodeTeachingMethods:
@@ -56,19 +47,16 @@ class TestEncodeTeachingMethods:
 
 
 class TestEncodeAssessmentMethods:
-    """Test encode_assessment_methods function."""
+    """Test encode_assessment_methods function (encoder expects EM prefix)."""
 
     def test_encode_assessment_methods_success(self):
         """Test successful assessment methods encoding."""
         df = pd.DataFrame({
             "Subject_ID": ["SUB001", "SUB002"],
-            "AM1": ["X", None],
-            "AM2": [None, "X"],
+            "EM1": ["X", None],
+            "EM2": [None, "X"],
         })
-
         result = encode_assessment_methods(df)
-
-        # Should have encoded columns
         assert result.select_dtypes(include=["int", "float64"]).shape[1] > 0
 
 

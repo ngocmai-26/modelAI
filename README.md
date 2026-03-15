@@ -113,38 +113,71 @@ python scripts/train.py \
 
 ### 2. Dự đoán cá nhân (có XAI)
 
+**Chế độ mới (khuyến nghị):** Không bắt buộc `--exam-scores`. Chỉ cần nhân khẩu + PPGD + PPDG cho sinh viên/môn/GV mới.
+
 ```bash
+# Môn chưa học — dự đoán điểm
+python scripts/predict.py \
+  --model models/model.joblib \
+  --student-id 19050006 \
+  --subject-id INF0823 \
+  --lecturer-id 90316 \
+  --demographics data/nhankhau.xlsx \
+  --teaching-methods data/PPGDfull.xlsx \
+  --assessment-methods data/PPDGfull.xlsx
+
+# Môn đã học — truyền điểm CLO thực để ưu tiên actual + nguyên nhân
+python scripts/predict.py \
+  --model models/model.joblib \
+  --student-id 19050006 \
+  --subject-id INF0823 \
+  --lecturer-id 90316 \
+  --demographics data/nhankhau.xlsx \
+  --teaching-methods data/PPGDfull.xlsx \
+  --assessment-methods data/PPDGfull.xlsx \
+  --actual-score 4.2
+
+# Có DiemTong — dùng exam-scores (tùy chọn)
 python scripts/predict.py \
   --model models/model.joblib \
   --student-id 19050006 \
   --subject-id INF0823 \
   --lecturer-id 90316 \
   --exam-scores data/DiemTong.xlsx \
-  --conduct-scores data/diemrenluyen.xlsx \
   --demographics data/nhankhau.xlsx \
   --teaching-methods data/PPGDfull.xlsx \
-  --assessment-methods data/PPDGfull.xlsx \
-  --study-hours data/tuhoc.xlsx
+  --assessment-methods data/PPDGfull.xlsx
 ```
 
-Output JSON: `predicted_clo`, lý do, giải pháp (theo schema `IndividualAnalysisOutput`).
+Output JSON: `predicted_clo`, `actual_clo_score` (nếu có), lý do, giải pháp.
 
 ### 3. Phân tích lớp
 
+**Chế độ chính (khuyến nghị):** `--scores-file` — file CSV/JSON danh sách điểm CLO (từ API/backend).
+
 ```bash
+# Phân tích từ file điểm CLO
 python scripts/analyze_class.py \
   --model models/model.joblib \
   --subject-id INF0823 \
   --lecturer-id 90316 \
-  --exam-scores data/DiemTong.xlsx \
-  --conduct-scores data/diemrenluyen.xlsx \
+  --scores-file data/clo_scores.csv \
   --demographics data/nhankhau.xlsx \
   --teaching-methods data/PPGDfull.xlsx \
   --assessment-methods data/PPDGfull.xlsx \
-  --study-hours data/tuhoc.xlsx \
+  --output result.json
+
+# Chỉ danh sách điểm (không MSSV) — phân tích phân phối, không SHAP
+python scripts/analyze_class.py \
+  --model models/model.joblib \
+  --subject-id INF0823 \
+  --lecturer-id 90316 \
+  --scores-file data/clo_scores.csv
 ```
 
-Có thể thêm `--actual-scores` để lưu điểm thực cho retraining. Output: `ClassAnalysisOutput`.
+**Chế độ cũ (deprecated):** `--exam-scores` (filter DiemTong) — vẫn chạy được nhưng không khuyến nghị.
+
+Output: `ClassAnalysisOutput`.
 
 ### 4. Dùng như thư viện (backend)
 
@@ -174,27 +207,33 @@ pipeline.run(
     output_path="models/model.joblib",
 )
 
-# Dự đoán cá nhân — khuyến nghị: truyền data paths khi khởi tạo, sau đó chỉ cần ID
+# Dự đoán cá nhân — không bắt buộc exam_scores_path (yêu cầu mới)
 pred_pipeline = PredictionPipeline(
     model_path="models/model.joblib",
-    exam_scores_path="data/DiemTong.xlsx",  # (và các path khác nếu có)
+    demographics_path="data/nhankhau.xlsx",
+    teaching_methods_path="data/PPGDfull.xlsx",
+    assessment_methods_path="data/PPDGfull.xlsx",
 )
 result = pred_pipeline.predict(
     student_id="19050006",
     subject_id="INF0823",
     lecturer_id="90316",
+    actual_clo_score=4.2,  # tùy chọn — môn đã học
 )
-# result: IndividualAnalysisOutput — dùng result.to_dict() hoặc result.to_json() để trả API
-# (Nếu không cache: có thể gọi predict(..., exam_scores_path="...") mỗi lần.)
+# result: IndividualAnalysisOutput — result.to_dict() / .to_json() cho API
 
-# Phân tích lớp
+# Phân tích lớp — dùng analyze_class_from_scores (chế độ chính)
 analysis_pipeline = AnalysisPipeline(model_path="models/model.joblib")
-class_result = analysis_pipeline.analyze_class(
+clo_scores = {"19050006": 4.2, "19050007": 3.8, "19050008": 5.1}  # hoặc List[float]
+class_result = analysis_pipeline.analyze_class_from_scores(
     subject_id="INF0823",
     lecturer_id="90316",
-    exam_scores_path="data/DiemTong.xlsx",
+    clo_scores=clo_scores,
+    demographics_path="data/nhankhau.xlsx",
+    teaching_methods_path="data/PPGDfull.xlsx",
+    assessment_methods_path="data/PPDGfull.xlsx",
 )
-# class_result: ClassAnalysisOutput — dùng class_result.to_dict() / .to_json() cho API
+# class_result: ClassAnalysisOutput — class_result.to_dict() / .to_json() cho API
 ```
 
 ## Test
@@ -221,6 +260,8 @@ Chi tiết test: xem `tests/README.md` và mục Testing trong `.cursor/rules.tx
 
 - `docs/model_requirements.md` — Yêu cầu model
 - `docs/data_model.md` — Cấu trúc dữ liệu
+- `docs/FEASIBILITY_REPORT_NEW_REQUIREMENTS.md` — Đánh giá tính khả thi (yêu cầu mới)
+- `docs/IMPLEMENTATION_PLAN_NEW_REQUIREMENTS.md` — Kế hoạch triển khai (yêu cầu mới)
 - `.cursor/rules.txt` — Quy tắc project, testing, plan
 - `plan.txt` — Kế hoạch phát triển từng giai đoạn
 
@@ -269,6 +310,20 @@ pip install /path/to/modelAI/dist/ml_clo-0.1.0.tar.gz
 ```
 
 Rồi `import ml_clo` như trên. Có thể copy thư mục `dist/` hoặc đưa lên server/file nội bộ rồi `pip install <url-hoặc-path>`.
+
+---
+
+## Yêu cầu mới — Đã triển khai (2026-03)
+
+**Báo cáo đánh giá tính khả thi:** [docs/FEASIBILITY_REPORT_NEW_REQUIREMENTS.md](docs/FEASIBILITY_REPORT_NEW_REQUIREMENTS.md)
+
+**Kế hoạch triển khai:** [docs/IMPLEMENTATION_PLAN_NEW_REQUIREMENTS.md](docs/IMPLEMENTATION_PLAN_NEW_REQUIREMENTS.md)
+
+Tóm tắt yêu cầu mới (đã triển khai):
+
+- **Phân tích lớp:** API `analyze_class_from_scores()` — đầu vào môn, mã GV, danh sách điểm CLO. CLI: `--scores-file`.
+- **Dự đoán cá nhân:** Không bắt buộc DiemTong. `--actual-score` cho môn đã học. Fallback `create_student_record_from_ids` khi SV/môn/GV chưa có trong DiemTong.
+- **ID:** MSSV từ nhân khẩu, mã môn từ PPGD/PPDG, GV mới dùng `__UNKNOWN__`.
 
 ---
 

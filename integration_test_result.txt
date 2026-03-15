@@ -1,0 +1,62 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.8, pytest-9.0.2, pluggy-1.6.0 -- /Users/thuan.nguyen.trong/Desktop/workspace/thuannt/modelAI/venv/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/thuan.nguyen.trong/Desktop/workspace/thuannt/modelAI
+configfile: pytest.ini (WARNING: ignoring pytest config in pyproject.toml!)
+plugins: mock-3.15.1, cov-7.0.0
+collecting ... collected 9 items
+
+tests/integration/test_pipelines/test_model_save_load.py::TestModelSaveLoad::test_model_save_load_roundtrip PASSED [ 11%]
+tests/integration/test_pipelines/test_model_save_load.py::TestModelSaveLoad::test_model_load_nonexistent_file PASSED [ 22%]
+tests/integration/test_pipelines/test_model_save_load.py::TestModelSaveLoad::test_model_predict_after_load PASSED [ 33%]
+tests/integration/test_pipelines/test_train_pipeline.py::TestTrainingPipeline::test_training_pipeline_full PASSED [ 44%]
+tests/integration/test_pipelines/test_train_pipeline.py::TestTrainingPipeline::test_training_pipeline_with_sample_data SKIPPED [ 55%]
+tests/integration/test_pipelines/test_train_pipeline.py::TestPredictionPipeline::test_load_data_cache_without_exam_scores PASSED [ 66%]
+tests/integration/test_pipelines/test_train_pipeline.py::TestPredictionPipeline::test_load_student_data_fallback_create_record_from_ids FAILED [ 77%]
+tests/integration/test_pipelines/test_train_pipeline.py::TestAnalysisPipeline::test_analyze_class_from_scores_distribution_only PASSED [ 88%]
+tests/integration/test_pipelines/test_train_pipeline.py::TestAnalysisPipeline::test_analyze_class_from_scores_dict PASSED [100%]
+
+=================================== FAILURES ===================================
+_ TestPredictionPipeline.test_load_student_data_fallback_create_record_from_ids _
+tests/integration/test_pipelines/test_train_pipeline.py:92: in test_load_student_data_fallback_create_record_from_ids
+    df = pipeline.load_student_data(
+src/ml_clo/pipelines/predict_pipeline.py:214: in load_student_data
+    if not (data.get("demographics") and data.get("teaching_methods") and data.get("assessment_methods")):
+            ^^^^^^^^^^^^^^^^^^^^^^^^
+venv/lib/python3.12/site-packages/pandas/core/generic.py:1513: in __bool__
+    raise ValueError(
+E   ValueError: The truth value of a DataFrame is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+---------------------------- Captured stdout setup -----------------------------
+2026-03-11 21:10:48 - ml_clo.models.ensemble_model - INFO - Training ensemble model (version v1.0_20260311_211048)
+2026-03-11 21:10:48 - ml_clo.models.ensemble_model - INFO - Training Random Forest model...
+2026-03-11 21:10:48 - ml_clo.models.ensemble_model - INFO - Training Gradient Boosting model...
+2026-03-11 21:10:49 - ml_clo.models.ensemble_model - INFO - Ensemble weights determined from validation: RF=0.558, GB=0.442
+2026-03-11 21:10:49 - ml_clo.models.ensemble_model - INFO - Validation MAE: RF=0.0895, GB=0.1131
+2026-03-11 21:10:49 - ml_clo.models.ensemble_model - INFO - Ensemble model training complete. Train MAE: 0.0200, Train R²: 0.9925
+----------------------------- Captured stdout call -----------------------------
+2026-03-11 21:10:49 - ml_clo.models.base_model - INFO - Saved model Ensemble (version v1.0_20260311_211048) to /private/var/folders/x4/s1d4ckm964v0qgf3znnjfhqh0000gp/T/pytest-of-thuan.nguyen.trong/pytest-4/test_load_student_data_fallbac0/model.joblib
+2026-03-11 21:10:49 - ml_clo.pipelines.predict_pipeline - INFO - Loading and caching data for prediction (one-time)
+2026-03-11 21:10:49 - ml_clo.data.loaders - INFO - Loading Excel file: /private/var/folders/x4/s1d4ckm964v0qgf3znnjfhqh0000gp/T/pytest-of-thuan.nguyen.trong/pytest-4/test_load_student_data_fallbac0/demo.xlsx
+2026-03-11 21:10:49 - ml_clo.data.loaders - INFO - Multiple sheets found, using first sheet: Sheet1
+2026-03-11 21:10:49 - ml_clo.data.loaders - INFO - Loaded 1 rows and 2 columns
+2026-03-11 21:10:49 - ml_clo.data.loaders - INFO - Successfully loaded demographics: 1 records
+2026-03-11 21:10:49 - ml_clo.data.loaders - INFO - Loading Excel file: /private/var/folders/x4/s1d4ckm964v0qgf3znnjfhqh0000gp/T/pytest-of-thuan.nguyen.trong/pytest-4/test_load_student_data_fallbac0/ppgd.xlsx
+2026-03-11 21:10:49 - ml_clo.data.loaders - INFO - Multiple sheets found, using first sheet: Sheet1
+2026-03-11 21:10:49 - ml_clo.data.loaders - INFO - Loaded 1 rows and 2 columns
+2026-03-11 21:10:49 - ml_clo.data.loaders - INFO - Successfully loaded teaching methods: 1 records
+2026-03-11 21:10:49 - ml_clo.data.encoders - INFO - Encoding 1 teaching method columns
+2026-03-11 21:10:49 - ml_clo.data.encoders - INFO - Successfully encoded teaching methods
+2026-03-11 21:10:49 - ml_clo.data.loaders - INFO - Loading Excel file: /private/var/folders/x4/s1d4ckm964v0qgf3znnjfhqh0000gp/T/pytest-of-thuan.nguyen.trong/pytest-4/test_load_student_data_fallbac0/ppdg.xlsx
+2026-03-11 21:10:49 - ml_clo.data.loaders - INFO - Multiple sheets found, using first sheet: Sheet1
+2026-03-11 21:10:49 - ml_clo.data.loaders - INFO - Loaded 1 rows and 2 columns
+2026-03-11 21:10:49 - ml_clo.data.loaders - INFO - Successfully loaded assessment methods: 1 records
+2026-03-11 21:10:49 - ml_clo.data.encoders - INFO - Encoding 1 assessment method columns
+2026-03-11 21:10:49 - ml_clo.data.encoders - INFO - Successfully encoded assessment methods
+2026-03-11 21:10:49 - ml_clo.pipelines.predict_pipeline - INFO - Data cache ready
+2026-03-11 21:10:49 - ml_clo.pipelines.predict_pipeline - INFO - Loading model from /private/var/folders/x4/s1d4ckm964v0qgf3znnjfhqh0000gp/T/pytest-of-thuan.nguyen.trong/pytest-4/test_load_student_data_fallbac0/model.joblib
+2026-03-11 21:10:49 - ml_clo.models.base_model - INFO - Loaded model Ensemble (version v1.0_20260311_211048) from /private/var/folders/x4/s1d4ckm964v0qgf3znnjfhqh0000gp/T/pytest-of-thuan.nguyen.trong/pytest-4/test_load_student_data_fallbac0/model.joblib
+2026-03-11 21:10:49 - ml_clo.pipelines.predict_pipeline - INFO - Model loaded: Ensemble (version v1.0_20260311_211048)
+2026-03-11 21:10:49 - ml_clo.pipelines.predict_pipeline - INFO - Loading data for student 99999999, subject INF0823
+=========================== short test summary info ============================
+FAILED tests/integration/test_pipelines/test_train_pipeline.py::TestPredictionPipeline::test_load_student_data_fallback_create_record_from_ids - ValueError: The truth value of a DataFrame is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+============== 1 failed, 7 passed, 1 skipped in 89.77s (0:01:29) ===============

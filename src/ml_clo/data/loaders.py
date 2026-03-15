@@ -191,7 +191,9 @@ def load_demographics(file_path: str) -> pd.DataFrame:
     """
     df = _load_excel_file(file_path)
 
-    # Ensure Student_ID is numeric if it exists
+    # Map MSSV -> Student_ID if needed (một số file dùng MSSV)
+    if "Student_ID" not in df.columns and "MSSV" in df.columns:
+        df["Student_ID"] = df["MSSV"]
     if "Student_ID" in df.columns:
         df["Student_ID"] = pd.to_numeric(df["Student_ID"], errors="coerce")
 

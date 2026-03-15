@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 """CLI script for analyzing a class and generating class-level CLO predictions.
 
+Chế độ chính: --scores-file (điểm CLO từ file/API, không cần DiemTong).
+Chế độ cũ: --exam-scores (filter DiemTong theo môn+GV) — deprecated.
+
 Usage:
     python scripts/analyze_class.py \\
         --model models/model.joblib \\
         --subject-id INF0823 \\
         --lecturer-id 90316 \\
-        --exam-scores data/DiemTong.xlsx
+        --scores-file data/clo_scores.csv \\
+        --demographics data/nhankhau.xlsx \\
+        --teaching-methods data/PPGDfull.xlsx \\
+        --assessment-methods data/PPDGfull.xlsx
 """
 
 import argparse
@@ -30,42 +36,31 @@ def parse_args():
         description="Analyze a class and generate class-level CLO predictions with XAI",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
-  # Basic class analysis with only exam scores
+Examples (chế độ chính — --scores-file):
+  # Phân tích từ file điểm CLO (điểm từ API/backend)
+  python scripts/analyze_class.py \\
+      --model models/model.joblib \\
+      --subject-id INF0823 \\
+      --lecturer-id 90316 \\
+      --scores-file data/clo_scores.csv \\
+      --demographics data/nhankhau.xlsx \\
+      --teaching-methods data/PPGDfull.xlsx \\
+      --assessment-methods data/PPDGfull.xlsx \\
+      --output result.json
+
+  # Chỉ danh sách điểm (không MSSV) — phân tích phân phối
+  python scripts/analyze_class.py \\
+      --model models/model.joblib \\
+      --subject-id INF0823 \\
+      --lecturer-id 90316 \\
+      --scores-file data/clo_scores_simple.csv
+
+Examples (chế độ cũ — --exam-scores, deprecated):
   python scripts/analyze_class.py \\
       --model models/model.joblib \\
       --subject-id INF0823 \\
       --lecturer-id 90316 \\
       --exam-scores data/DiemTong.xlsx
-
-  # Full class analysis with all data sources
-  python scripts/analyze_class.py \\
-      --model models/model.joblib \\
-      --subject-id INF0823 \\
-      --lecturer-id 90316 \\
-      --exam-scores data/DiemTong.xlsx \\
-      --conduct-scores data/diemrenluyen.xlsx \\
-      --demographics data/nhankhau.xlsx \\
-      --teaching-methods data/PPGDfull.xlsx \\
-      --assessment-methods data/PPDGfull.xlsx \\
-      --study-hours data/tuhoc.xlsx
-
-  # Class analysis with actual scores storage for retraining
-  python scripts/analyze_class.py \\
-      --model models/model.joblib \\
-      --subject-id INF0823 \\
-      --lecturer-id 90316 \\
-      --exam-scores data/DiemTong.xlsx \\
-      --actual-scores actual_scores.json \\
-      --storage-path data/actual_scores.csv
-
-  # Output to JSON file
-  python scripts/analyze_class.py \\
-      --model models/model.joblib \\
-      --subject-id INF0823 \\
-      --lecturer-id 90316 \\
-      --exam-scores data/DiemTong.xlsx \\
-      --output result.json
         """,
     )
 
@@ -91,8 +86,14 @@ Examples:
     parser.add_argument(
         "--exam-scores",
         type=str,
-        required=True,
-        help="Path to exam scores Excel file",
+        default=None,
+        help="Path to exam scores Excel file (deprecated — dùng --scores-file)",
+    )
+    parser.add_argument(
+        "--scores-file",
+        type=str,
+        default=None,
+        help="Path to CSV/JSON file với danh sách điểm CLO (chế độ mới). CSV: student_id,clo_score hoặc clo_score. JSON: {\"scores\": [...]} hoặc {\"student_id\": score, ...}",
     )
 
     # Optional data sources
@@ -165,9 +166,13 @@ def validate_paths(args):
     if not Path(args.model).exists():
         errors.append(f"Model file not found: {args.model}")
 
-    # Check required file
-    if not Path(args.exam_scores).exists():
+    # Need --exam-scores OR --scores-file
+    if not args.exam_scores and not args.scores_file:
+        errors.append("Cần --exam-scores hoặc --scores-file")
+    if args.exam_scores and not Path(args.exam_scores).exists():
         errors.append(f"Exam scores file not found: {args.exam_scores}")
+    if args.scores_file and not Path(args.scores_file).exists():
+        errors.append(f"Scores file not found: {args.scores_file}")
 
     # Check optional files
     if args.conduct_scores and not Path(args.conduct_scores).exists():
@@ -194,6 +199,45 @@ def validate_paths(args):
         for error in errors:
             print(f"  - {error}", file=sys.stderr)
         sys.exit(1)
+
+
+def load_scores_from_file(file_path: str):
+    """Load clo_scores từ CSV hoặc JSON.
+
+    Returns:
+        Union[Dict[str, float], List[float], List[Tuple[str, float]]]
+    """
+    path = Path(file_path)
+    suffix = path.suffix.lower()
+
+    if suffix == ".json":
+        with open(file_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            if "scores" in data:
+                return data["scores"]
+            return data
+        if isinstance(data, list):
+            return data
+        raise ValueError(f"JSON không hợp lệ: cần dict hoặc list")
+
+    if suffix == ".csv":
+        import csv
+        with open(file_path, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+        if not rows:
+            raise ValueError("CSV trống")
+        keys = list(rows[0].keys())
+        keys_lower = {k.lower(): k for k in keys}
+        id_col = keys_lower.get("student_id") or keys_lower.get("mssv")
+        score_candidates = [k for k in keys if "score" in k.lower() or "clo" in k.lower() or "diem" in k.lower()]
+        score_col = score_candidates[0] if score_candidates else keys[-1]
+        if id_col:
+            return [(str(r.get(id_col, "")), float(r.get(score_col, 0))) for r in rows]
+        return [float(r.get(score_col, 0)) for r in rows]
+
+    raise ValueError(f"Định dạng không hỗ trợ: {suffix}. Dùng .csv hoặc .json")
 
 
 def load_actual_scores(file_path: str) -> dict:
@@ -256,19 +300,35 @@ def main():
     try:
         analyzer = AnalysisPipeline(args.model)
 
-        # Run analysis
-        result = analyzer.analyze_class(
-            subject_id=args.subject_id,
-            lecturer_id=args.lecturer_id,
-            exam_scores_path=args.exam_scores,
-            conduct_scores_path=args.conduct_scores,
-            demographics_path=args.demographics,
-            teaching_methods_path=args.teaching_methods,
-            assessment_methods_path=args.assessment_methods,
-            study_hours_path=args.study_hours,
-            actual_scores=actual_scores,
-            storage_path=args.storage_path,
-        )
+        if args.scores_file:
+            clo_scores = load_scores_from_file(args.scores_file)
+            result = analyzer.analyze_class_from_scores(
+                subject_id=args.subject_id,
+                lecturer_id=args.lecturer_id,
+                clo_scores=clo_scores,
+                demographics_path=args.demographics,
+                conduct_scores_path=args.conduct_scores,
+                teaching_methods_path=args.teaching_methods,
+                assessment_methods_path=args.assessment_methods,
+                study_hours_path=args.study_hours,
+            )
+        else:
+            logger.warning(
+                "Chế độ --exam-scores (filter DiemTong) deprecated. "
+                "Nên dùng --scores-file với danh sách điểm CLO."
+            )
+            result = analyzer.analyze_class(
+                subject_id=args.subject_id,
+                lecturer_id=args.lecturer_id,
+                exam_scores_path=args.exam_scores,
+                conduct_scores_path=args.conduct_scores,
+                demographics_path=args.demographics,
+                teaching_methods_path=args.teaching_methods,
+                assessment_methods_path=args.assessment_methods,
+                study_hours_path=args.study_hours,
+                actual_scores=actual_scores,
+                storage_path=args.storage_path,
+            )
 
         # Convert to JSON
         output_json = result.to_json(indent=2)

@@ -1,5 +1,6 @@
 """Unit tests for data loaders."""
 
+import pandas as pd
 import pytest
 from pathlib import Path
 
@@ -53,6 +54,15 @@ class TestLoadConductScores:
 
 class TestLoadDemographics:
     """Test load_demographics function."""
+
+    def test_load_demographics_mssv_maps_to_student_id(self, tmp_path):
+        """Test MSSV -> Student_ID mapping khi file chỉ có MSSV (yêu cầu mới)."""
+        demo_path = tmp_path / "demo_mssv.xlsx"
+        df = pd.DataFrame({"MSSV": [19050006, 19050007], "Gender": [1, 0]})
+        df.to_excel(demo_path, index=False)
+        result = load_demographics(str(demo_path))
+        assert "Student_ID" in result.columns
+        assert list(result["Student_ID"]) == [19050006, 19050007]
 
     def test_load_demographics_success(self):
         """Test successful loading of demographics."""

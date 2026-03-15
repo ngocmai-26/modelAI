@@ -108,6 +108,87 @@ def generate_summary_reason(
     return summary
 
 
+def generate_explanation_from_distribution(
+    scores: List[float],
+    context: str = "class",
+) -> Dict[str, any]:
+    """Tạo explanation từ phân phối điểm khi không có SHAP (chỉ danh sách điểm, không MSSV).
+
+    Args:
+        scores: Danh sách điểm CLO (0-6)
+        context: "class" (mặc định)
+
+    Returns:
+        Dict giống generate_complete_explanation: summary, reasons, predicted_score
+    """
+    import numpy as np
+
+    scores_arr = np.array([float(s) for s in scores if s is not None])
+    if len(scores_arr) == 0:
+        return {
+            "predicted_score": 0.0,
+            "summary": "Không có dữ liệu điểm để phân tích.",
+            "reasons": [],
+        }
+
+    mean_score = float(np.mean(scores_arr))
+    median_score = float(np.median(scores_arr))
+    std_score = float(np.std(scores_arr)) if len(scores_arr) > 1 else 0.0
+    low_count = int((scores_arr < 3.0).sum())
+    total = len(scores_arr)
+    low_pct = (low_count / total * 100) if total > 0 else 0
+
+    reasons = []
+
+    # Điểm thấp
+    if mean_score < 3.5:
+        reasons.append({
+            "group_name": "Học lực",
+            "reason_text": f"Điểm trung bình lớp thấp ({mean_score:.1f}/6). "
+            f"Có {low_count}/{total} sinh viên ({low_pct:.0f}%) có điểm dưới 3.0.",
+            "impact_percentage": min(100, max(50, 100 - mean_score * 20)),
+            "solutions": [
+                "Ôn tập lại kiến thức nền tảng",
+                "Tăng cường bài tập thực hành",
+                "Tổ chức buổi học bù cho các phần khó",
+            ],
+        })
+
+    # Phân tán cao
+    if std_score > 1.2 and total > 5:
+        reasons.append({
+            "group_name": "Chênh lệch trình độ",
+            "reason_text": f"Phân tán điểm cao (độ lệch chuẩn {std_score:.1f}). Trình độ sinh viên trong lớp chênh lệch nhiều.",
+            "impact_percentage": min(80, int(std_score * 30)),
+            "solutions": [
+                "Phân nhóm học theo trình độ",
+                "Hỗ trợ riêng cho nhóm yếu",
+                "Bài tập phân cấp độ khó",
+            ],
+        })
+
+    # Nếu không có lý do cụ thể
+    if not reasons:
+        reasons.append({
+            "group_name": "Tổng quan",
+            "reason_text": f"Điểm trung bình: {mean_score:.1f}, trung vị: {median_score:.1f}. "
+            f"Phân phối điểm ổn định." if std_score < 1.0 else f"Độ phân tán: {std_score:.1f}.",
+            "impact_percentage": 30,
+            "solutions": ["Duy trì phương pháp giảng dạy hiện tại", "Theo dõi tiến độ lớp"],
+        })
+
+    summary = (
+        f"Phân tích từ {total} điểm CLO: trung bình {mean_score:.1f}/6. "
+        + (f"{low_count} sinh viên ({low_pct:.0f}%) có điểm thấp." if low_count > 0 else "Lớp đạt mức trung bình trở lên.")
+    )
+
+    return {
+        "predicted_score": mean_score,
+        "summary": summary,
+        "reasons": reasons,
+    }
+
+
 def generate_complete_explanation(
     top_negative_impacts: List[Tuple[str, float, float]],
     predicted_score: float,

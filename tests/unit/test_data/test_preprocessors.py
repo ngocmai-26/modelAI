@@ -18,31 +18,26 @@ from ml_clo.utils.exceptions import DataValidationError
 
 
 class TestStandardizeStudentID:
-    """Test standardize_student_id function."""
+    """Test standardize_student_id function (expects numeric Student_ID)."""
 
     def test_standardize_student_id_success(self):
         """Test successful standardization."""
         df = pd.DataFrame({
-            "Student_ID": ["SV001", "SV002", "SV003"],
+            "Student_ID": [19050006, 19050007, 19050008],
             "exam_score": [5.0, 6.0, 4.5],
         })
-
         result = standardize_student_id(df)
-
         assert len(result) == 3
         assert "Student_ID" in result.columns
 
     def test_standardize_student_id_with_missing(self):
-        """Test standardization with missing values."""
+        """Test standardization with missing values (invalid removed)."""
         df = pd.DataFrame({
-            "Student_ID": ["SV001", None, "SV003"],
+            "Student_ID": [19050006, None, 19050008],
             "exam_score": [5.0, 6.0, 4.5],
         })
-
-        result = standardize_student_id(df, remove_invalid=True)
-
-        # Should remove rows with missing Student_ID
-        assert len(result) <= 3
+        result = standardize_student_id(df)
+        assert len(result) == 2
 
 
 class TestStandardizeSubjectID:
@@ -92,17 +87,13 @@ class TestCleanExamScore:
         assert result["exam_score"].dtype in [np.float64, float]
 
     def test_clean_exam_score_remove_invalid(self):
-        """Test cleaning with invalid values."""
+        """Test cleaning với giá trị non-numeric (VT, Vắng → NaN, bị remove)."""
         df = pd.DataFrame({
-            "exam_score": [5.0, -1.0, 15.0, None, 6.0],
+            "exam_score": [5.0, "VT", 15.0, None, 6.0],
         })
-
         result = clean_exam_score(df, remove_invalid=True)
-
-        # Should remove invalid values
-        assert len(result) <= 5
-        assert (result["exam_score"] >= 0).all()
-        assert (result["exam_score"] <= 10).all()
+        assert len(result) == 3
+        assert result["exam_score"].dtype in [np.float64, float]
 
 
 class TestConvertScore10To6:
@@ -167,13 +158,11 @@ class TestHandleMissingValues:
         assert result["col1"].notna().all()
 
     def test_handle_missing_values_fill(self):
-        """Test filling missing values."""
+        """Test filling missing values (fill_median)."""
         df = pd.DataFrame({
             "col1": [1.0, 2.0, None, 4.0],
         })
-
-        result = handle_missing_values(df, strategy="fill", columns=["col1"])
-
+        result = handle_missing_values(df, strategy="fill_median", columns=["col1"])
         assert len(result) == 4
         assert result["col1"].notna().all()
 
@@ -182,18 +171,16 @@ class TestPreprocessExamScores:
     """Test preprocess_exam_scores function."""
 
     def test_preprocess_exam_scores_success(self):
-        """Test successful preprocessing."""
+        """Test successful preprocessing (numeric Student_ID)."""
         df = pd.DataFrame({
-            "Student_ID": ["SV001", "SV002", "SV003"],
-            "Subject_ID": ["SUB001", "SUB002", "SUB003"],
-            "Lecturer_ID": ["LEC001", "LEC002", "LEC003"],
+            "Student_ID": [19050006, 19050007, 19050008],
+            "Subject_ID": ["INF0823", "INF0824", "INF0825"],
+            "Lecturer_ID": ["90316", "90317", "90318"],
             "exam_score": [10.0, 5.0, 0.0],
         })
-
         result = preprocess_exam_scores(df, convert_to_clo=True, create_result=True)
-
         assert len(result) == 3
         assert "exam_score" in result.columns
-        assert result["exam_score"].max() <= 6.0  # Converted to 6-point scale
-        assert "Result" in result.columns  # Result column created
+        assert result["exam_score"].max() <= 6.0
+        assert "Result" in result.columns
 

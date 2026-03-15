@@ -512,3 +512,43 @@ Giải pháp không được sinh bằng mô hình học máy mà **được án
 - Danh sách nguyên nhân phổ biến
 - Mức độ ảnh hưởng trung bình
 - Giải pháp ưu tiên cho lớp
+
+---
+
+# 10. YÊU CẦU MỚI — Đã triển khai (2026-03)
+
+**Bối cảnh:** Các yêu cầu cũ không đáp ứng nhu cầu. Yêu cầu mới đã **thay thế hoàn toàn** (deprecate API cũ, xây dựng lại các thành phần).
+
+**Tham chiếu:**
+- [Báo cáo đánh giá tính khả thi](FEASIBILITY_REPORT_NEW_REQUIREMENTS.md)
+- [Kế hoạch triển khai](IMPLEMENTATION_PLAN_NEW_REQUIREMENTS.md)
+- [Phạm vi deprecation](DEPRECATION_SCOPE.md)
+
+## 10.1 Mô hình phân tích lớp (Class Analysis) — Đã triển khai
+
+| Thành phần | Mô tả |
+|------------|-------|
+| **API** | `analyze_class_from_scores(subject_id, lecturer_id, clo_scores, ...)` |
+| **Đầu vào** | `clo_scores`: Dict[student_id, score] hoặc List[float] hoặc List[Tuple] |
+| **CLI** | `--scores-file` (CSV/JSON) — chế độ chính; `--exam-scores` deprecated |
+| **Đầu ra** | Nguyên nhân, mức độ ảnh hưởng, giải pháp (ClassAnalysisOutput) |
+
+Có MSSV + demographics → SHAP chi tiết; chỉ danh sách điểm → phân tích phân phối (không SHAP).
+
+## 10.2 Mô hình dự đoán cá nhân — Đã triển khai
+
+| Kịch bản | Xử lý |
+|----------|-------|
+| **Môn đã học & đã đỗ** | `actual_clo_score` trong `predict()` — ưu tiên điểm thực + nguyên nhân; CLI: `--actual-score` |
+| **Môn chưa học** | Dự đoán từ features; fallback `create_student_record_from_ids` khi không có trong DiemTong |
+| **Nguồn dữ liệu** | Không bắt buộc `--exam-scores`; chỉ cần demographics + PPGD + PPDG |
+
+## 10.3 Nới lỏng ràng buộc ID — Đã triển khai
+
+**MSSV, mã môn, mã giảng viên không bắt buộc phải có trong DiemTong:**
+
+| Entity | Nguồn thay thế | Ghi chú |
+|--------|----------------|---------|
+| **MSSV** | `nhankhau.xlsx` (hoặc cột MSSV) | Sinh viên mới dùng nhân khẩu làm nguồn chính |
+| **Mã môn** | PPGD/PPDG | Môn mới lấy TM/EM từ file; thiếu → 0 |
+| **Mã GV** | Không có file | Giảng viên mới → `__UNKNOWN__`, encode -1 khi predict |

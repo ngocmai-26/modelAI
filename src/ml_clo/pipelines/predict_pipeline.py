@@ -26,7 +26,7 @@ from ml_clo.data.loaders import (
     load_study_hours,
     load_teaching_methods,
 )
-from ml_clo.data.mergers import create_training_dataset
+from ml_clo.data.mergers import create_student_record_from_ids, create_training_dataset
 from ml_clo.data.preprocessors import preprocess_exam_scores
 from ml_clo.features.feature_builder import build_all_features
 from ml_clo.models.ensemble_model import EnsembleModel
@@ -86,7 +86,10 @@ class PredictionPipeline:
         self.feature_names: Optional[list] = None
         self._data_cache: Optional[Dict[str, Any]] = None
 
-        if exam_scores_path:
+        if (
+            exam_scores_path
+            or (demographics_path and teaching_methods_path and assessment_methods_path)
+        ):
             self.load_data_cache(
                 exam_scores_path=exam_scores_path,
                 conduct_scores_path=conduct_scores_path,
@@ -98,18 +101,23 @@ class PredictionPipeline:
 
     def load_data_cache(
         self,
-        exam_scores_path: str,
+        exam_scores_path: Optional[str] = None,
         conduct_scores_path: Optional[str] = None,
         demographics_path: Optional[str] = None,
         teaching_methods_path: Optional[str] = None,
         assessment_methods_path: Optional[str] = None,
         study_hours_path: Optional[str] = None,
     ) -> None:
-        """Load và cache toàn bộ data một lần. Sau đó predict() chỉ cần student_id, subject_id, lecturer_id."""
+        """Load và cache data. Cần ít nhất exam_scores_path HOẶC (demographics_path + teaching_methods_path + assessment_methods_path)."""
         logger.info("Loading and caching data for prediction (one-time)")
-        exam_df = load_exam_scores(exam_scores_path)
-        exam_df = preprocess_exam_scores(exam_df, convert_to_clo=True, create_result=False)
-        cache: Dict[str, Any] = {"exam_scores": exam_df}
+        cache: Dict[str, Any] = {}
+        if exam_scores_path and Path(exam_scores_path).exists():
+            exam_df = load_exam_scores(exam_scores_path)
+            cache["exam_scores"] = preprocess_exam_scores(
+                exam_df, convert_to_clo=True, create_result=False
+            )
+        else:
+            cache["exam_scores"] = None
         if conduct_scores_path and Path(conduct_scores_path).exists():
             cache["conduct_scores"] = load_conduct_scores(conduct_scores_path)
         if demographics_path and Path(demographics_path).exists():
@@ -169,35 +177,16 @@ class PredictionPipeline:
         logger.info(f"Loading data for student {student_id}, subject {subject_id}")
 
         if self._data_cache is not None:
-            exam_df = self._data_cache["exam_scores"]
-            # Normalize types: Student_ID is int64, Subject_ID/Lecturer_ID are str
-            _sid = int(student_id) if isinstance(student_id, str) and student_id.isdigit() else student_id
-            _subj = str(subject_id).strip()
-            _lec = str(lecturer_id).strip()
-            student_data = exam_df[
-                (exam_df["Student_ID"] == _sid)
-                & (exam_df["Subject_ID"] == _subj)
-                & (exam_df["Lecturer_ID"] == _lec)
-            ].copy()
             data = dict(self._data_cache)
-            data["exam_scores"] = student_data
         else:
-            if not exam_scores_path:
-                raise ValueError(
-                    "No data cache and no exam_scores_path. "
-                    "Pass exam_scores_path at init or to predict()."
+            data = {}
+            if exam_scores_path and Path(exam_scores_path).exists():
+                exam_df = load_exam_scores(exam_scores_path)
+                data["exam_scores"] = preprocess_exam_scores(
+                    exam_df, convert_to_clo=True, create_result=False
                 )
-            exam_df = load_exam_scores(exam_scores_path)
-            exam_df = preprocess_exam_scores(exam_df, convert_to_clo=True, create_result=False)
-            _sid = int(student_id) if isinstance(student_id, str) and student_id.isdigit() else student_id
-            _subj = str(subject_id).strip()
-            _lec = str(lecturer_id).strip()
-            student_data = exam_df[
-                (exam_df["Student_ID"] == _sid)
-                & (exam_df["Subject_ID"] == _subj)
-                & (exam_df["Lecturer_ID"] == _lec)
-            ].copy()
-            data = {"exam_scores": student_data}
+            else:
+                data["exam_scores"] = None
             if conduct_scores_path and Path(conduct_scores_path).exists():
                 data["conduct_scores"] = load_conduct_scores(conduct_scores_path)
             if demographics_path and Path(demographics_path).exists():
@@ -211,29 +200,66 @@ class PredictionPipeline:
             if study_hours_path and Path(study_hours_path).exists():
                 data["study_hours"] = load_study_hours(study_hours_path)
 
-        if len(student_data) == 0:
-            raise ValueError(
-                f"No data found for student_id={student_id}, "
-                f"subject_id={subject_id}, lecturer_id={lecturer_id}"
-            )
+        exam_df = data.get("exam_scores")
+        if exam_df is not None:
+            _sid = int(student_id) if isinstance(student_id, str) and student_id.isdigit() else student_id
+            _subj = str(subject_id).strip()
+            _lec = str(lecturer_id).strip()
+            student_data = exam_df[
+                (exam_df["Student_ID"] == _sid)
+                & (exam_df["Subject_ID"] == _subj)
+                & (exam_df["Lecturer_ID"] == _lec)
+            ].copy()
+        else:
+            def _has_valid(v):
+                return v is not None and (not isinstance(v, pd.DataFrame) or not v.empty)
 
-        full_exam_df = self._data_cache["exam_scores"] if self._data_cache else exam_df
-        training_df = create_training_dataset(
-            exam_df=student_data,
-            conduct_df=data.get("conduct_scores"),
-            demographics_df=data.get("demographics"),
-            teaching_methods_df=data.get("teaching_methods"),
-            assessment_methods_df=data.get("assessment_methods"),
-            study_hours_df=data.get("study_hours"),
-            target_column="exam_score",
-            drop_missing_target=False,
-        )
-        training_df = build_all_features(
-            training_df,
-            conduct_history_df=data.get("conduct_scores"),
-            exam_history_df=full_exam_df,
-            study_hours_df=data.get("study_hours"),
-        )
+            demo = data.get("demographics")
+            ppgd = data.get("teaching_methods")
+            ppdg = data.get("assessment_methods")
+            if not (_has_valid(demo) and _has_valid(ppgd) and _has_valid(ppdg)):
+                raise ValueError(
+                    "No exam_scores and no demographics+teaching_methods+assessment_methods. "
+                    "Pass exam_scores_path or (demographics_path, teaching_methods_path, assessment_methods_path)."
+                )
+            student_data = None
+
+        if student_data is not None and len(student_data) > 0:
+            full_exam_df = exam_df
+            training_df = create_training_dataset(
+                exam_df=student_data,
+                conduct_df=data.get("conduct_scores"),
+                demographics_df=data.get("demographics"),
+                teaching_methods_df=data.get("teaching_methods"),
+                assessment_methods_df=data.get("assessment_methods"),
+                study_hours_df=data.get("study_hours"),
+                target_column="exam_score",
+                drop_missing_target=False,
+            )
+        else:
+            # Fallback: tạo record từ nhân khẩu + PPGD/PPDG (SV/môn/GV mới không cần có trong DiemTong)
+            base_df = create_student_record_from_ids(
+                student_id=student_id,
+                subject_id=subject_id,
+                lecturer_id=lecturer_id,
+                demographics_df=data.get("demographics"),
+                teaching_methods_df=data.get("teaching_methods"),
+                assessment_methods_df=data.get("assessment_methods"),
+                year=2024,
+            )
+            from ml_clo.data.mergers import merge_exam_and_conduct_scores, merge_study_hours
+
+            full_exam_df = pd.DataFrame(columns=["Student_ID", "Subject_ID", "Lecturer_ID", "year", "exam_score"])
+            if data.get("conduct_scores") is not None:
+                base_df = merge_exam_and_conduct_scores(base_df, data["conduct_scores"], year_column="year")
+            if data.get("study_hours") is not None:
+                base_df = merge_study_hours(base_df, data["study_hours"], year_column="year")
+            training_df = build_all_features(
+                base_df,
+                conduct_history_df=data.get("conduct_scores"),
+                exam_history_df=exam_df if exam_df is not None else full_exam_df,
+                study_hours_df=data.get("study_hours"),
+            )
         logger.info(f"Student data prepared: {len(training_df)} records")
         return training_df
 
@@ -286,8 +312,13 @@ class PredictionPipeline:
             if X[col].dtype == "object" or X[col].dtype.name == "category":
                 if col in label_encoders:
                     le = label_encoders[col]
-                    X[col] = X[col].fillna("Unknown")
-                    X[col] = le.transform(X[col].astype(str))
+                    X[col] = X[col].fillna("__UNKNOWN__")
+                    vals = X[col].astype(str)
+                    mask = vals.isin(le.classes_)
+                    encoded = np.full(len(vals), -1, dtype=np.int64)
+                    if mask.any():
+                        encoded[mask] = le.transform(vals[mask])
+                    X[col] = encoded
                 else:
                     # Create new encoder if not found
                     le = LabelEncoder()
@@ -332,11 +363,15 @@ class PredictionPipeline:
         teaching_methods_path: Optional[str] = None,
         assessment_methods_path: Optional[str] = None,
         study_hours_path: Optional[str] = None,
+        actual_clo_score: Optional[float] = None,
     ) -> IndividualAnalysisOutput:
         """Predict CLO score and generate explanation for a student.
 
         Nếu đã truyền data paths khi khởi tạo (hoặc gọi load_data_cache()), chỉ cần:
         predict(student_id=..., subject_id=..., lecturer_id=...).
+
+        Môn đã học & đã đỗ: truyền actual_clo_score → output ưu tiên điểm thực, vẫn dùng SHAP cho nguyên nhân.
+        Môn chưa học: không truyền actual_clo_score → trả về điểm dự đoán + nguyên nhân.
 
         Args:
             student_id: Student ID
@@ -348,6 +383,7 @@ class PredictionPipeline:
             teaching_methods_path: Path PPGD (optional)
             assessment_methods_path: Path PPDG (optional)
             study_hours_path: Path tự học (optional)
+            actual_clo_score: Điểm CLO thực (môn đã đỗ) — nếu có thì output ưu tiên giá trị này
 
         Returns:
             IndividualAnalysisOutput with prediction and explanation
@@ -359,10 +395,18 @@ class PredictionPipeline:
         if self.explainer is None:
             self.explainer = EnsembleSHAPExplainer(self.model, cache_explainer=True)
 
-        if self._data_cache is None and exam_scores_path is None:
+        has_cache = self._data_cache is not None
+        has_exam = exam_scores_path is not None and Path(exam_scores_path).exists()
+        has_demo_tm_am = (
+            demographics_path and teaching_methods_path and assessment_methods_path
+            and Path(demographics_path).exists()
+            and Path(teaching_methods_path).exists()
+            and Path(assessment_methods_path).exists()
+        )
+        if not has_cache and not has_exam and not has_demo_tm_am:
             raise ValueError(
-                "No data cache. Pass exam_scores_path (and optional paths) at init: "
-                "PredictionPipeline(model_path, exam_scores_path='...') or to predict()."
+                "No data. Pass at init or to predict(): "
+                "exam_scores_path, OR (demographics_path + teaching_methods_path + assessment_methods_path)."
             )
 
         student_df = self.load_student_data(
@@ -394,24 +438,28 @@ class PredictionPipeline:
             df=None,
         )
 
-        # Generate explanation
+        # Generate explanation — khi có actual_clo_score thì summary/context dùng actual
+        display_score = actual_clo_score if actual_clo_score is not None else predicted_score
         explanation = generate_complete_explanation(
             top_negative_impacts=processed["top_negative_impacts"],
-            predicted_score=predicted_score,
+            predicted_score=display_score,
             context="individual",
             include_solutions=True,
         )
 
-        # Convert to output schema
+        # Convert to output schema (predicted = model, actual = điểm thực nếu có)
         output = IndividualAnalysisOutput.from_explanation_dict(
             explanation,
             student_id=student_id,
             subject_id=subject_id,
             lecturer_id=lecturer_id,
+            predicted_clo_score=predicted_score,
+            actual_clo_score=actual_clo_score,
         )
 
         logger.info(
-            f"Prediction complete: score={predicted_score:.2f}, "
+            f"Prediction complete: predicted={predicted_score:.2f}, "
+            f"actual={'%.2f' % actual_clo_score if actual_clo_score is not None else 'N/A'}, "
             f"reasons={len(output.reasons)}"
         )
 

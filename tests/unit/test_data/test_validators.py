@@ -1,5 +1,6 @@
 """Unit tests for data validators."""
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -36,17 +37,11 @@ class TestValidateDataTypes:
         validate_data_types(df, schema)
 
     def test_validate_data_types_failure(self):
-        """Test data type validation failure."""
-        df = pd.DataFrame({
-            "col1": ["a", "b", "c"],  # Should be int
-        })
-
-        schema = {
-            "col1": "int64",
-        }
-
+        """Test data type validation failure (strict=True raises)."""
+        df = pd.DataFrame({"col1": ["a", "b", "c"]})
+        schema = {"col1": np.int64}
         with pytest.raises(DataValidationError):
-            validate_data_types(df, schema)
+            validate_data_types(df, schema, strict=True)
 
 
 class TestValidateRanges:
@@ -66,17 +61,10 @@ class TestValidateRanges:
         validate_ranges(df, ranges)
 
     def test_validate_ranges_failure(self):
-        """Test range validation failure."""
-        df = pd.DataFrame({
-            "score": [7.0, 8.0],  # Out of range
-        })
-
-        ranges = {
-            "score": (0.0, 6.0),
-        }
-
+        """Test range validation failure (strict=True raises)."""
+        df = pd.DataFrame({"score": [7.0, 8.0]})
         with pytest.raises(DataValidationError):
-            validate_ranges(df, ranges)
+            validate_ranges(df, {"score": (0.0, 6.0)}, strict=True)
 
 
 class TestValidateRequiredFields:
@@ -96,15 +84,10 @@ class TestValidateRequiredFields:
         validate_required_fields(df, required)
 
     def test_validate_required_fields_failure(self):
-        """Test required fields validation failure."""
-        df = pd.DataFrame({
-            "Student_ID": ["SV001", "SV002"],
-        })
-
-        required = ["Student_ID", "Subject_ID"]
-
+        """Test required fields validation failure (strict=True raises)."""
+        df = pd.DataFrame({"Student_ID": ["SV001", "SV002"]})
         with pytest.raises(DataValidationError):
-            validate_required_fields(df, required)
+            validate_required_fields(df, ["Student_ID", "Subject_ID"], strict=True)
 
 
 class TestValidateNoMissingValues:
@@ -120,13 +103,10 @@ class TestValidateNoMissingValues:
         validate_no_missing_values(df, ["col1"])
 
     def test_validate_no_missing_values_failure(self):
-        """Test missing values validation failure."""
-        df = pd.DataFrame({
-            "col1": [1.0, None, 3.0],
-        })
-
+        """Test missing values validation failure (strict=True raises)."""
+        df = pd.DataFrame({"col1": [1.0, None, 3.0]})
         with pytest.raises(DataValidationError):
-            validate_no_missing_values(df, ["col1"])
+            validate_no_missing_values(df, ["col1"], strict=True)
 
 
 class TestValidateCloScoreRange:
@@ -142,13 +122,10 @@ class TestValidateCloScoreRange:
         validate_clo_score_range(df)
 
     def test_validate_clo_score_range_failure(self):
-        """Test CLO score range validation failure."""
-        df = pd.DataFrame({
-            "exam_score": [7.0, 8.0],  # Out of range
-        })
-
+        """Test CLO score range validation failure (strict=True raises)."""
+        df = pd.DataFrame({"exam_score": [7.0, 8.0]})
         with pytest.raises(DataValidationError):
-            validate_clo_score_range(df)
+            validate_clo_score_range(df, strict=True)
 
 
 class TestValidateConductScoreRange:
@@ -164,30 +141,21 @@ class TestValidateConductScoreRange:
         validate_conduct_score_range(df)
 
     def test_validate_conduct_score_range_failure(self):
-        """Test conduct score range validation failure."""
-        df = pd.DataFrame({
-            "conduct_score": [150.0],  # Out of range
-        })
-
+        """Test conduct score range validation failure (strict=True raises)."""
+        df = pd.DataFrame({"conduct_score": [150.0]})
         with pytest.raises(DataValidationError):
-            validate_conduct_score_range(df)
+            validate_conduct_score_range(df, strict=True)
 
 
 class TestValidateDataConsistency:
-    """Test validate_data_consistency function."""
+    """Test validate_data_consistency function (checks duplicate keys in single df)."""
 
     def test_validate_data_consistency_success(self):
-        """Test successful data consistency validation."""
-        df1 = pd.DataFrame({
-            "Student_ID": ["SV001", "SV002"],
+        """Test successful data consistency (no duplicate Student_ID)."""
+        df = pd.DataFrame({
+            "Student_ID": [19050006, 19050007],
             "exam_score": [5.0, 6.0],
         })
-
-        df2 = pd.DataFrame({
-            "Student_ID": ["SV001", "SV002"],
-            "conduct_score": [85.0, 90.0],
-        })
-
-        # Should not raise
-        validate_data_consistency(df1, df2, key_column="Student_ID")
+        is_valid, _ = validate_data_consistency(df, id_columns=["Student_ID"])
+        assert is_valid
 

@@ -58,6 +58,7 @@ class IndividualAnalysisOutput:
         student_id: Student ID (optional, for reference)
         subject_id: Subject ID (optional, for reference)
         lecturer_id: Lecturer ID (optional, for reference)
+        actual_clo_score: Điểm CLO thực tế (môn đã học, đã đỗ) — nếu có thì output ưu tiên giá trị này
     """
 
     predicted_clo_score: float
@@ -66,12 +67,17 @@ class IndividualAnalysisOutput:
     student_id: Optional[str] = None
     subject_id: Optional[str] = None
     lecturer_id: Optional[str] = None
+    actual_clo_score: Optional[float] = None
 
     def __post_init__(self):
         """Validate data after initialization."""
         if not 0 <= self.predicted_clo_score <= 6:
             raise ValueError(
                 f"predicted_clo_score must be between 0 and 6, got {self.predicted_clo_score}"
+            )
+        if self.actual_clo_score is not None and not 0 <= self.actual_clo_score <= 6:
+            raise ValueError(
+                f"actual_clo_score must be between 0 and 6, got {self.actual_clo_score}"
             )
 
         for reason in self.reasons:
@@ -87,7 +93,7 @@ class IndividualAnalysisOutput:
         Returns:
             Dictionary representation
         """
-        return {
+        result = {
             "predicted_clo_score": round(self.predicted_clo_score, 2),
             "summary": self.summary,
             "reasons": [reason.to_dict() for reason in self.reasons],
@@ -95,6 +101,9 @@ class IndividualAnalysisOutput:
             "subject_id": self.subject_id,
             "lecturer_id": self.lecturer_id,
         }
+        if self.actual_clo_score is not None:
+            result["actual_clo_score"] = round(self.actual_clo_score, 2)
+        return result
 
     def to_json(self, indent: Optional[int] = 2) -> str:
         """Convert to JSON string.
@@ -116,6 +125,8 @@ class IndividualAnalysisOutput:
         student_id: Optional[str] = None,
         subject_id: Optional[str] = None,
         lecturer_id: Optional[str] = None,
+        predicted_clo_score: Optional[float] = None,
+        actual_clo_score: Optional[float] = None,
     ) -> "IndividualAnalysisOutput":
         """Create from reason generator output.
 
@@ -124,6 +135,8 @@ class IndividualAnalysisOutput:
             student_id: Student ID (optional)
             subject_id: Subject ID (optional)
             lecturer_id: Lecturer ID (optional)
+            predicted_clo_score: Điểm dự đoán từ model (nếu None thì lấy từ explanation)
+            actual_clo_score: Điểm CLO thực (môn đã đỗ) — nếu có thì output ưu tiên hiển thị
 
         Returns:
             IndividualAnalysisOutput instance
@@ -138,13 +151,15 @@ class IndividualAnalysisOutput:
             for reason_dict in explanation.get("reasons", [])
         ]
 
+        score = predicted_clo_score if predicted_clo_score is not None else explanation["predicted_score"]
         return cls(
-            predicted_clo_score=explanation["predicted_score"],
+            predicted_clo_score=score,
             summary=explanation["summary"],
             reasons=reasons,
             student_id=student_id,
             subject_id=subject_id,
             lecturer_id=lecturer_id,
+            actual_clo_score=actual_clo_score,
         )
 
 
@@ -317,6 +332,10 @@ def validate_output(output: Union[IndividualAnalysisOutput, ClassAnalysisOutput]
         if not 0 <= output.predicted_clo_score <= 6:
             raise ValueError(
                 f"Invalid predicted_clo_score: {output.predicted_clo_score}"
+            )
+        if output.actual_clo_score is not None and not 0 <= output.actual_clo_score <= 6:
+            raise ValueError(
+                f"Invalid actual_clo_score: {output.actual_clo_score}"
             )
         for reason in output.reasons:
             if not 0 <= reason.impact_percentage <= 100:

@@ -11,7 +11,7 @@ This module provides a complete analysis pipeline that integrates:
 """
 
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -26,12 +26,20 @@ from ml_clo.data.loaders import (
     load_study_hours,
     load_teaching_methods,
 )
-from ml_clo.data.mergers import create_training_dataset
+from ml_clo.data.mergers import (
+    create_student_record_from_ids,
+    create_training_dataset,
+    merge_exam_and_conduct_scores,
+    merge_study_hours,
+)
 from ml_clo.data.preprocessors import preprocess_exam_scores
 from ml_clo.features.feature_builder import build_all_features
 from ml_clo.models.ensemble_model import EnsembleModel
 from ml_clo.outputs.schemas import ClassAnalysisOutput
-from ml_clo.reasoning.reason_generator import generate_complete_explanation
+from ml_clo.reasoning.reason_generator import (
+    generate_complete_explanation,
+    generate_explanation_from_distribution,
+)
 from ml_clo.utils.exceptions import ModelLoadError
 from ml_clo.utils.logger import get_logger
 from ml_clo.xai.shap_explainer import EnsembleSHAPExplainer
@@ -97,7 +105,10 @@ class AnalysisPipeline:
         assessment_methods_path: Optional[str] = None,
         study_hours_path: Optional[str] = None,
     ) -> pd.DataFrame:
-        """Load data for all students in a class.
+        """Load data for all students in a class (filter DiemTong).
+
+        .. deprecated::
+            Dùng :meth:`analyze_class_from_scores` với danh sách điểm CLO thay vì filter DiemTong.
 
         Args:
             subject_id: Subject ID
@@ -112,6 +123,10 @@ class AnalysisPipeline:
         Returns:
             DataFrame with class data ready for analysis
         """
+        logger.warning(
+            "load_class_data (filter DiemTong) deprecated. "
+            "Dùng analyze_class_from_scores(clo_scores=...) thay thế."
+        )
         logger.info(f"Loading class data for subject {subject_id}, lecturer {lecturer_id}")
 
         # Load all data sources
@@ -314,7 +329,11 @@ class AnalysisPipeline:
         actual_scores: Optional[Dict[str, float]] = None,
         storage_path: Optional[str] = None,
     ) -> ClassAnalysisOutput:
-        """Analyze class and generate class-level explanation.
+        """Analyze class by filtering DiemTong (chế độ cũ).
+
+        .. deprecated::
+            Dùng :meth:`analyze_class_from_scores` với danh sách điểm CLO.
+            API/backend truyền điểm trực tiếp, không cần DiemTong.
 
         Args:
             subject_id: Subject ID
@@ -331,6 +350,10 @@ class AnalysisPipeline:
         Returns:
             ClassAnalysisOutput with class-level analysis
         """
+        logger.warning(
+            "analyze_class (filter DiemTong) deprecated. "
+            "Dùng analyze_class_from_scores(clo_scores=...) thay thế."
+        )
         logger.info(f"Analyzing class: subject {subject_id}, lecturer {lecturer_id}")
 
         # Load model if not already loaded
@@ -403,4 +426,199 @@ class AnalysisPipeline:
         )
 
         return output
+
+    def _normalize_clo_scores(
+        self,
+        clo_scores: Union[Dict[str, float], List[float], List[Tuple[str, float]]],
+    ) -> List[Tuple[str, float]]:
+        """Chuẩn hóa clo_scores thành List[(student_id, score)]."""
+        if isinstance(clo_scores, dict):
+            return [(str(k), float(v)) for k, v in clo_scores.items()]
+        if isinstance(clo_scores, list) and len(clo_scores) > 0:
+            first = clo_scores[0]
+            if isinstance(first, (list, tuple)) and len(first) >= 2:
+                return [(str(p[0]), float(p[1])) for p in clo_scores]
+            return [("_anonymous_" + str(i), float(s)) for i, s in enumerate(clo_scores)]
+        return []
+
+    def analyze_class_from_scores(
+        self,
+        subject_id: str,
+        lecturer_id: str,
+        clo_scores: Union[Dict[str, float], List[float], List[Tuple[str, float]]],
+        demographics_path: Optional[str] = None,
+        conduct_scores_path: Optional[str] = None,
+        teaching_methods_path: Optional[str] = None,
+        assessment_methods_path: Optional[str] = None,
+        study_hours_path: Optional[str] = None,
+    ) -> ClassAnalysisOutput:
+        """Phân tích lớp từ danh sách điểm CLO (không cần DiemTong).
+
+        Đầu vào: môn, mã GV, danh sách điểm. Có thể kèm MSSV hoặc chỉ điểm.
+
+        Args:
+            subject_id: Mã môn học
+            lecturer_id: Mã giảng viên
+            clo_scores: Một trong:
+                - Dict[student_id, score]
+                - List[score] (chỉ điểm)
+                - List[(student_id, score)]
+            demographics_path: Path nhân khẩu (bắt buộc khi có MSSV)
+            conduct_scores_path: Path điểm rèn luyện (tùy chọn)
+            teaching_methods_path: Path PPGD (bắt buộc khi có MSSV)
+            assessment_methods_path: Path PPDG (bắt buộc khi có MSSV)
+            study_hours_path: Path tự học (tùy chọn)
+
+        Returns:
+            ClassAnalysisOutput
+        """
+        logger.info(f"Analyzing class from scores: subject {subject_id}, lecturer {lecturer_id}")
+
+        pairs = self._normalize_clo_scores(clo_scores)
+        if not pairs:
+            raise ValueError("clo_scores trống hoặc định dạng không hợp lệ")
+
+        scores_only = [p[1] for p in pairs]
+        has_student_ids = all(
+            sid and not sid.startswith("_anonymous_") and sid != "_no_id"
+            for sid, _ in pairs
+        )
+
+        if not has_student_ids:
+            return self._analyze_from_distribution(
+                subject_id=subject_id,
+                lecturer_id=lecturer_id,
+                scores=scores_only,
+            )
+
+        has_data = (
+            demographics_path and Path(demographics_path).exists()
+            and teaching_methods_path and Path(teaching_methods_path).exists()
+            and assessment_methods_path and Path(assessment_methods_path).exists()
+        )
+        if not has_data:
+            return self._analyze_from_distribution(
+                subject_id=subject_id,
+                lecturer_id=lecturer_id,
+                scores=scores_only,
+            )
+
+        return self._analyze_with_shap(
+            subject_id=subject_id,
+            lecturer_id=lecturer_id,
+            pairs=pairs,
+            demographics_path=demographics_path,
+            conduct_scores_path=conduct_scores_path,
+            teaching_methods_path=teaching_methods_path,
+            assessment_methods_path=assessment_methods_path,
+            study_hours_path=study_hours_path,
+        )
+
+    def _analyze_from_distribution(
+        self,
+        subject_id: str,
+        lecturer_id: str,
+        scores: List[float],
+    ) -> ClassAnalysisOutput:
+        """Phân tích chỉ từ phân phối điểm (không SHAP)."""
+        explanation = generate_explanation_from_distribution(scores, context="class")
+        return ClassAnalysisOutput.from_explanation_dict(
+            explanation,
+            subject_id=subject_id,
+            lecturer_id=lecturer_id,
+            total_students=len(scores),
+            average_predicted_score=explanation["predicted_score"],
+        )
+
+    def _analyze_with_shap(
+        self,
+        subject_id: str,
+        lecturer_id: str,
+        pairs: List[Tuple[str, float]],
+        demographics_path: str,
+        conduct_scores_path: Optional[str] = None,
+        teaching_methods_path: Optional[str] = None,
+        assessment_methods_path: Optional[str] = None,
+        study_hours_path: Optional[str] = None,
+    ) -> ClassAnalysisOutput:
+        """Phân tích có MSSV: build features, predict, SHAP, aggregate."""
+        if self.model is None:
+            self.load_model()
+        if self.explainer is None:
+            self.explainer = EnsembleSHAPExplainer(self.model, cache_explainer=True)
+
+        data = {}
+        data["demographics"] = load_demographics(demographics_path)
+        tm_df = load_teaching_methods(teaching_methods_path)
+        data["teaching_methods"] = encode_teaching_methods(tm_df)
+        em_df = load_assessment_methods(assessment_methods_path)
+        data["assessment_methods"] = encode_assessment_methods(em_df)
+        data["conduct_scores"] = (
+            load_conduct_scores(conduct_scores_path)
+            if conduct_scores_path and Path(conduct_scores_path).exists()
+            else None
+        )
+        data["study_hours"] = (
+            load_study_hours(study_hours_path)
+            if study_hours_path and Path(study_hours_path).exists()
+            else None
+        )
+
+        full_exam_df = pd.DataFrame(columns=["Student_ID", "Subject_ID", "Lecturer_ID", "year", "exam_score"])
+        records = []
+
+        for student_id, score in pairs:
+            base_df = create_student_record_from_ids(
+                student_id=student_id,
+                subject_id=subject_id,
+                lecturer_id=lecturer_id,
+                demographics_df=data["demographics"],
+                teaching_methods_df=data["teaching_methods"],
+                assessment_methods_df=data["assessment_methods"],
+                year=2024,
+            )
+            base_df["exam_score"] = score
+            if data["conduct_scores"] is not None:
+                base_df = merge_exam_and_conduct_scores(base_df, data["conduct_scores"], year_column="year")
+            if data["study_hours"] is not None:
+                base_df = merge_study_hours(base_df, data["study_hours"], year_column="year")
+            records.append(base_df)
+
+        class_df = pd.concat(records, ignore_index=True)
+        class_df = build_all_features(
+            class_df,
+            conduct_history_df=data["conduct_scores"],
+            exam_history_df=full_exam_df,
+            study_hours_df=data["study_hours"],
+        )
+
+        X = self.prepare_features(class_df)
+        predictions = self.model.predict(X)
+        average_predicted_score = float(np.mean(predictions))
+
+        shap_values_batch = self.explainer.explain_batch(X)
+        aggregated_shap = aggregate_class_shap(
+            [shap_values_batch[i] for i in range(len(shap_values_batch))],
+            feature_names=self.feature_names,
+        )
+        processed = process_shap_for_analysis(
+            aggregated_shap,
+            feature_names=self.feature_names,
+            df=None,
+        )
+
+        explanation = generate_complete_explanation(
+            top_negative_impacts=processed["top_negative_impacts"],
+            predicted_score=average_predicted_score,
+            context="class",
+            include_solutions=True,
+        )
+
+        return ClassAnalysisOutput.from_explanation_dict(
+            explanation,
+            subject_id=subject_id,
+            lecturer_id=lecturer_id,
+            total_students=len(class_df),
+            average_predicted_score=average_predicted_score,
+        )
 

@@ -34,10 +34,10 @@ class TestEnsembleModel:
         metrics = model.train(X_train, y_train, X_val, y_val)
 
         assert model.is_trained
-        assert "train_mae" in metrics
-        assert "val_mae" in metrics
-        assert metrics["train_mae"] >= 0
-        assert metrics["val_mae"] >= 0
+        assert "ensemble_train_mae" in metrics
+        assert "ensemble_val_mae" in metrics
+        assert metrics["ensemble_train_mae"] >= 0
+        assert metrics["ensemble_val_mae"] >= 0
 
     def test_ensemble_model_predict(self, trained_model, sample_features):
         """Test ensemble model prediction."""

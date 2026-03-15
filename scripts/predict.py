@@ -53,13 +53,24 @@ Examples:
       --assessment-methods data/PPDGfull.xlsx \\
       --study-hours data/tuhoc.xlsx
 
-  # Output to JSON file
+  # Môn đã đỗ — truyền điểm thực (--actual-score)
   python scripts/predict.py \\
       --model models/model.joblib \\
       --student-id 19050006 \\
       --subject-id INF0823 \\
       --lecturer-id 90316 \\
       --exam-scores data/DiemTong.xlsx \\
+      --actual-score 4.2
+
+  # Không cần DiemTong — dùng nhân khẩu + PPGD/PPDG
+  python scripts/predict.py \\
+      --model models/model.joblib \\
+      --student-id 19050006 \\
+      --subject-id INF0823 \\
+      --lecturer-id 90316 \\
+      --demographics data/nhankhau.xlsx \\
+      --teaching-methods data/PPGDfull.xlsx \\
+      --assessment-methods data/PPDGfull.xlsx \\
       --output result.json
         """,
     )
@@ -92,8 +103,14 @@ Examples:
     parser.add_argument(
         "--exam-scores",
         type=str,
-        required=True,
-        help="Path to exam scores Excel file",
+        default=None,
+        help="Path to exam scores Excel file (optional if --demographics + --teaching-methods + --assessment-methods)",
+    )
+    parser.add_argument(
+        "--actual-score",
+        type=float,
+        default=None,
+        help="Điểm CLO thực tế (môn đã học, đã đỗ) — nếu có thì output ưu tiên giá trị này",
     )
 
     # Optional data sources
@@ -145,15 +162,25 @@ Examples:
 
 
 def validate_paths(args):
-    """Validate that input files exist."""
+    """Validate that input files exist and data sources are sufficient."""
     errors = []
 
     # Check model file
     if not Path(args.model).exists():
         errors.append(f"Model file not found: {args.model}")
 
-    # Check required file
-    if not Path(args.exam_scores).exists():
+    # Need exam_scores OR (demographics + teaching_methods + assessment_methods)
+    has_exam = args.exam_scores and Path(args.exam_scores).exists()
+    has_demo_tm_am = (
+        args.demographics and Path(args.demographics).exists()
+        and args.teaching_methods and Path(args.teaching_methods).exists()
+        and args.assessment_methods and Path(args.assessment_methods).exists()
+    )
+    if not has_exam and not has_demo_tm_am:
+        errors.append(
+            "Need --exam-scores OR (--demographics + --teaching-methods + --assessment-methods)"
+        )
+    if args.exam_scores and not Path(args.exam_scores).exists():
         errors.append(f"Exam scores file not found: {args.exam_scores}")
 
     # Check optional files
@@ -197,7 +224,15 @@ def main():
     print("=" * 80)
 
     try:
-        predictor = PredictionPipeline(args.model)
+        predictor = PredictionPipeline(
+            args.model,
+            exam_scores_path=args.exam_scores,
+            conduct_scores_path=args.conduct_scores,
+            demographics_path=args.demographics,
+            teaching_methods_path=args.teaching_methods,
+            assessment_methods_path=args.assessment_methods,
+            study_hours_path=args.study_hours,
+        )
 
         # Run prediction
         result = predictor.predict(
@@ -210,6 +245,7 @@ def main():
             teaching_methods_path=args.teaching_methods,
             assessment_methods_path=args.assessment_methods,
             study_hours_path=args.study_hours,
+            actual_clo_score=args.actual_score,
         )
 
         # Convert to JSON
@@ -232,7 +268,11 @@ def main():
         print("\n" + "=" * 80)
         print("SUMMARY")
         print("=" * 80)
-        print(f"Predicted CLO Score: {result.predicted_clo_score:.2f}")
+        if result.actual_clo_score is not None:
+            print(f"Actual CLO Score: {result.actual_clo_score:.2f}")
+            print(f"Predicted CLO Score: {result.predicted_clo_score:.2f}")
+        else:
+            print(f"Predicted CLO Score: {result.predicted_clo_score:.2f}")
         print(f"Summary: {result.summary}")
         print(f"Number of reasons: {len(result.reasons)}")
         if result.reasons:

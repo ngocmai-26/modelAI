@@ -40,18 +40,20 @@ class TestEnsembleSHAPExplainer:
         assert shap_values is not None
         assert len(shap_values) == len(batch)  # One per instance
 
-    def test_shap_explainer_get_feature_importance(self, trained_model):
-        """Test feature importance retrieval."""
+    def test_shap_explainer_get_feature_importance(self, trained_model, sample_features):
+        """Test feature importance retrieval (cần X)."""
+        X, _ = sample_features
         explainer = EnsembleSHAPExplainer(trained_model, cache_explainer=True)
-        importance = explainer.get_feature_importance()
+        importance = explainer.get_feature_importance(X)
 
         assert importance is not None
         assert isinstance(importance, dict) or isinstance(importance, np.ndarray)
 
-    def test_shap_explainer_get_top_features(self, trained_model):
-        """Test top features retrieval."""
+    def test_shap_explainer_get_top_features(self, trained_model, sample_features):
+        """Test top features retrieval (param top_n, cần X)."""
+        X, _ = sample_features
         explainer = EnsembleSHAPExplainer(trained_model, cache_explainer=True)
-        top_features = explainer.get_top_features(top_k=5)
+        top_features = explainer.get_top_features(X, top_n=5)
 
         assert top_features is not None
         assert len(top_features) <= 5

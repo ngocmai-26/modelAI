@@ -972,3 +972,38 @@ Làm **ngưỡng hoặc mốc chuẩn** để so sánh nỗ lực học tập.
 | --- | --- |
 | **tuhoc.xlsx** | **Nỗ lực tự học** |
 | --- | --- |
+
+---
+
+## IX. NGUỒN DỮ LIỆU MỚI — Yêu cầu mới (2026-03)
+
+**Bối cảnh:** Predict và phân tích lớp không bắt buộc (Student_ID, Subject_ID, Lecturer_ID) phải có trong DiemTong. Hệ thống dùng các nguồn thay thế sau.
+
+### Nguồn thay thế cho entity
+
+| **Entity** | **Nguồn chính** | **Ghi chú** |
+|------------|-----------------|-------------|
+| **MSSV / Student_ID** | `nhankhau.xlsx` | Cột MSSV hoặc Student_ID; map MSSV → Student_ID khi load. Sinh viên mới chỉ cần có trong nhân khẩu. |
+| **Subject_ID** | PPGD (`PPGDfull.xlsx`) / PPDG (`PPDGfull.xlsx`) | Môn mới lấy TM/EM từ file; thiếu cột → 0 |
+| **Lecturer_ID** | Không có file riêng | GV mới → placeholder `__UNKNOWN__`; khi encode dùng -1 cho unseen |
+
+### Tạo record ảo (`create_student_record_from_ids`)
+
+Khi predict cho sinh viên/môn/GV chưa có trong DiemTong, hệ thống tạo 1 record "ảo" từ:
+
+- `(student_id, subject_id, lecturer_id)` + `demographics_df` (left join) + `teaching_methods_df` (Subject_ID) + `assessment_methods_df` (Subject_ID)
+
+Record có `exam_score = NaN`; `create_training_dataset` hỗ trợ `drop_missing_target=False`.
+
+### File điểm CLO cho phân tích lớp (`--scores-file`)
+
+**Định dạng CSV:**
+```
+student_id,clo_score
+19050006,4.2
+19050007,3.8
+```
+
+**Định dạng JSON:** `{"scores": [4.2, 3.8, 5.1]}` hoặc `[{"student_id": "19050006", "clo_score": 4.2}, ...]`
+
+Điểm CLO thang 0–6, có thể từ API/backend thay vì filter DiemTong.

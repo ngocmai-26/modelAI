@@ -2,16 +2,81 @@
 
 This module provides functions to merge multiple data sources into a single
 training dataset. All merges are based on Student_ID, Subject_ID, and year.
+
+Yêu cầu mới: Hỗ trợ tạo record "ảo" từ (student_id, subject_id, lecturer_id)
+khi không có trong DiemTong — dùng nhân khẩu, PPGD/PPDG làm nguồn chính.
 """
 
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 
 from ml_clo.utils.exceptions import DataValidationError
 from ml_clo.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+LECTURER_PLACEHOLDER = "__UNKNOWN__"
+
+
+def create_student_record_from_ids(
+    student_id: str,
+    subject_id: str,
+    lecturer_id: str,
+    demographics_df: Optional[pd.DataFrame] = None,
+    teaching_methods_df: Optional[pd.DataFrame] = None,
+    assessment_methods_df: Optional[pd.DataFrame] = None,
+    year: Optional[float] = None,
+) -> pd.DataFrame:
+    """Tạo 1 record "ảo" cho (student_id, subject_id, lecturer_id) từ nhân khẩu, PPGD/PPDG.
+
+    Dùng khi sinh viên/môn/GV chưa có trong DiemTong (yêu cầu mới: không bắt buộc).
+
+    Args:
+        student_id: Mã sinh viên
+        subject_id: Mã môn học
+        lecturer_id: Mã giảng viên (có thể mới, không có file)
+        demographics_df: Nhân khẩu (nhankhau.xlsx)
+        teaching_methods_df: PPGD (đã encode TM)
+        assessment_methods_df: PPDG (đã encode EM)
+        year: Năm học (optional, mặc định 2024)
+
+    Returns:
+        DataFrame 1 dòng với Student_ID, Subject_ID, Lecturer_ID, year, exam_score (NaN),
+        và các cột từ demographics, TM, EM (nếu có).
+    """
+    _sid = int(student_id) if isinstance(student_id, str) and str(student_id).isdigit() else student_id
+    _subj = str(subject_id).strip()
+    _lec = str(lecturer_id).strip() if lecturer_id else LECTURER_PLACEHOLDER
+    _year = year if year is not None else 2024
+
+    base = pd.DataFrame([{
+        "Student_ID": _sid,
+        "Subject_ID": _subj,
+        "Lecturer_ID": _lec,
+        "year": _year,
+        "exam_score": np.nan,
+    }])
+
+    if demographics_df is not None and "Student_ID" in demographics_df.columns:
+        demo_copy = demographics_df.copy()
+        demo_copy["Student_ID"] = pd.to_numeric(demo_copy["Student_ID"], errors="coerce")
+        base = merge_demographics(base, demo_copy)
+
+    if teaching_methods_df is not None and "Subject_ID" in teaching_methods_df.columns:
+        base = merge_teaching_methods(base, teaching_methods_df)
+
+    if assessment_methods_df is not None and "Subject_ID" in assessment_methods_df.columns:
+        base = merge_assessment_methods(base, assessment_methods_df)
+
+    # Thiếu TM/EM sẽ được prepare_features bù bằng 0 khi predict
+
+    logger.info(
+        f"Created virtual record: student_id={student_id}, subject_id={subject_id}, "
+        f"lecturer_id={lecturer_id or 'placeholder'}"
+    )
+    return base
 
 
 def merge_exam_and_conduct_scores(
@@ -325,20 +390,41 @@ def merge_attendance(
 
     # Map Vietnamese column names to standard names
     attendance_df = attendance_df.copy()
+    # Primary mapping; fallbacks for files that use different column names
     column_mapping = {
         "MSSV": "Student_ID",
         "Mã môn học": "Subject_ID",
         "Niên khoá": "year",
     }
-
     for vn_col, std_col in column_mapping.items():
         if vn_col in attendance_df.columns and std_col not in attendance_df.columns:
             attendance_df[std_col] = attendance_df[vn_col]
 
-    # Extract year from Niên khoá if needed (e.g., "2024-2025" -> 2024)
+    # Fallback: Năm học -> year (một số file dùng Năm học thay Niên khoá)
+    if "year" not in attendance_df.columns and "Năm học" in attendance_df.columns:
+        attendance_df["year"] = attendance_df["Năm học"]
+    # Fallback: Tên môn học -> Subject_ID khi thiếu Mã môn học (giá trị có thể không khớp khi merge)
+    if "Subject_ID" not in attendance_df.columns and "Tên môn học" in attendance_df.columns:
+        attendance_df["Subject_ID"] = attendance_df["Tên môn học"].astype(str).str.strip()
+
+    # Extract year from Niên khoá/Năm học if needed (e.g., "2024-2025" -> 2024)
     if "year" in attendance_df.columns:
         attendance_df["year"] = attendance_df["year"].astype(str).str.split("-").str[0]
         attendance_df["year"] = pd.to_numeric(attendance_df["year"], errors="coerce")
+
+    # Kiểm tra cột bắt buộc sau mapping; nếu thiếu thì bỏ qua merge, trả về df với attendance_rate=NaN
+    required_attendance_cols = ["Student_ID", "Subject_ID", "year"]
+    missing_att = [c for c in required_attendance_cols if c not in attendance_df.columns]
+    if missing_att:
+        logger.warning(
+            f"Attendance file thiếu cột sau mapping: {missing_att}. Bỏ qua merge attendance. "
+            f"(Cần MSSV, Mã môn học hoặc Tên môn học, Niên khoá hoặc Năm học)"
+        )
+        df = df.copy()
+        if year_column in df.columns:
+            df[year_column] = pd.to_numeric(df[year_column], errors="coerce")
+        df["attendance_rate"] = np.nan
+        return df
 
     # Ensure Student_ID and Subject_ID are correct types
     if "Student_ID" in attendance_df.columns:
