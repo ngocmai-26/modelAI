@@ -73,7 +73,7 @@ Liệt kê rõ API, hàm, logic nào sẽ bị **loại bỏ** hoặc **deprecat
 **Logic mới:**
 - Student: lấy từ `nhankhau` theo Student_ID (left join).
 - Subject: lấy từ PPGD/PPDG theo Subject_ID (left join); nếu thiếu → TM/EM = 0.
-- Lecturer: không có nguồn → dùng placeholder (ví dụ: "UNKNOWN").
+- Lecturer: không có nguồn → dùng placeholder (ví dụ: `__UNKNOWN__`).
 
 #### 1.2.2 LabelEncoder cho entity mới
 

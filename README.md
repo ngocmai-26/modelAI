@@ -330,7 +330,8 @@ Tóm tắt yêu cầu mới (đã triển khai):
 ## Tiếp theo
 
 - Đặt file Excel vào `data/`, train model: `python scripts/train.py --exam-scores data/DiemTong.xlsx --output models/model.joblib`
-- Dự đoán cá nhân / phân tích lớp: dùng `scripts/predict.py`, `scripts/analyze_class.py` (xem phần Sử dụng trên).
+- Dự đoán cá nhân: `scripts/predict.py` (có thể không cần `--exam-scores` khi dùng nhân khẩu + PPGD + PPDG)
+- Phân tích lớp: `scripts/analyze_class.py --scores-file data/clo_scores.csv` (chế độ chính) hoặc `--exam-scores` (deprecated)
 - Tích hợp backend: import `ml_clo.pipelines` và dùng `TrainingPipeline`, `PredictionPipeline`, `AnalysisPipeline`.
 
 ## License

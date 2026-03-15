@@ -9,3 +9,7 @@ dist/
 build/
 *.egg-info/
 *.egg
+
+# Test outputs
+test_result.txt
+integration_test_result.txt

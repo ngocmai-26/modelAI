@@ -89,7 +89,7 @@ def test_prediction_pipeline():
 
 
 def test_analysis_pipeline():
-    """Test analysis pipeline."""
+    """Test analysis pipeline (dùng analyze_class — chế độ cũ; API mới: analyze_class_from_scores)."""
     print("\n" + "=" * 80)
     print("Testing Analysis Pipeline")
     print("=" * 80)
