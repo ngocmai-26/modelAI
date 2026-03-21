@@ -127,6 +127,12 @@ Examples (chế độ cũ — --exam-scores, deprecated):
         default=None,
         help="Path to study hours Excel file (optional)",
     )
+    parser.add_argument(
+        "--attendance",
+        type=str,
+        default=None,
+        help="Path to attendance (điểm danh) Excel file (optional)",
+    )
 
     # Actual scores for retraining
     parser.add_argument(
@@ -153,6 +159,11 @@ Examples (chế độ cũ — --exam-scores, deprecated):
         "--verbose",
         action="store_true",
         help="Enable verbose logging",
+    )
+    parser.add_argument(
+        "--include-average-predicted",
+        action="store_true",
+        help="Hiển thị average_predicted_score trong output (mặc định ẩn theo feedback)",
     )
 
     return parser.parse_args()
@@ -189,6 +200,9 @@ def validate_paths(args):
 
     if args.study_hours and not Path(args.study_hours).exists():
         errors.append(f"Study hours file not found: {args.study_hours}")
+
+    if args.attendance and not Path(args.attendance).exists():
+        errors.append(f"Attendance file not found: {args.attendance}")
 
     # Check actual scores file if provided
     if args.actual_scores and not Path(args.actual_scores).exists():
@@ -311,6 +325,7 @@ def main():
                 teaching_methods_path=args.teaching_methods,
                 assessment_methods_path=args.assessment_methods,
                 study_hours_path=args.study_hours,
+                attendance_path=args.attendance,
             )
         else:
             logger.warning(
@@ -326,12 +341,16 @@ def main():
                 teaching_methods_path=args.teaching_methods,
                 assessment_methods_path=args.assessment_methods,
                 study_hours_path=args.study_hours,
+                attendance_path=args.attendance,
                 actual_scores=actual_scores,
                 storage_path=args.storage_path,
             )
 
-        # Convert to JSON
-        output_json = result.to_json(indent=2)
+        # Convert to JSON (mặc định ẩn average_predicted_score theo feedback)
+        output_json = result.to_json(
+            indent=2,
+            include_average_predicted=args.include_average_predicted,
+        )
 
         # Save or print
         if args.output:
@@ -351,7 +370,8 @@ def main():
         print("SUMMARY")
         print("=" * 80)
         print(f"Total students: {result.total_students}")
-        print(f"Average predicted CLO score: {result.average_predicted_score:.2f}")
+        if args.include_average_predicted and result.average_predicted_score is not None:
+            print(f"Average predicted CLO score: {result.average_predicted_score:.2f}")
         print(f"Summary: {result.summary}")
         print(f"Number of common reasons: {len(result.common_reasons)}")
         if result.common_reasons:

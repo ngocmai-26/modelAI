@@ -8,7 +8,8 @@ Usage:
         --demographics data/nhankhau.xlsx \\
         --teaching-methods data/PPGDfull.xlsx \\
         --assessment-methods data/PPDGfull.xlsx \\
-        --study-hours data/tuhoc.xlsx
+        --study-hours data/tuhoc.xlsx \\
+        --attendance "data/Dữ liệu điểm danh Khoa FIRA.xlsx"
 """
 
 import argparse
@@ -43,7 +44,8 @@ Examples:
       --demographics data/nhankhau.xlsx \\
       --teaching-methods data/PPGDfull.xlsx \\
       --assessment-methods data/PPDGfull.xlsx \\
-      --study-hours data/tuhoc.xlsx
+      --study-hours data/tuhoc.xlsx \\
+      --attendance "data/Dữ liệu điểm danh Khoa FIRA.xlsx"
 
   # Training with custom random state and split ratios
   python scripts/train.py \\
@@ -100,6 +102,12 @@ Examples:
         default=None,
         help="Path to study hours Excel file (optional)",
     )
+    parser.add_argument(
+        "--attendance",
+        type=str,
+        default=None,
+        help="Path to attendance (điểm danh) Excel file (optional)",
+    )
 
     # Training parameters
     parser.add_argument(
@@ -155,6 +163,9 @@ def validate_paths(args):
     if args.study_hours and not Path(args.study_hours).exists():
         errors.append(f"Study hours file not found: {args.study_hours}")
 
+    if args.attendance and not Path(args.attendance).exists():
+        errors.append(f"Attendance file not found: {args.attendance}")
+
     # Check output directory exists
     output_path = Path(args.output)
     if not output_path.parent.exists():
@@ -192,6 +203,8 @@ def main():
         print(f"Assessment methods: {args.assessment_methods}")
     if args.study_hours:
         print(f"Study hours: {args.study_hours}")
+    if args.attendance:
+        print(f"Attendance: {args.attendance}")
     print(f"Output: {args.output}")
     print(f"Random state: {args.random_state}")
     print(f"Test size: {args.test_size}")
@@ -214,6 +227,7 @@ def main():
             teaching_methods_path=args.teaching_methods,
             assessment_methods_path=args.assessment_methods,
             study_hours_path=args.study_hours,
+            attendance_path=args.attendance,
         )
 
         # Print summary

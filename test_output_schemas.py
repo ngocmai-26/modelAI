@@ -176,21 +176,28 @@ def test_class_analysis_output():
         average_predicted_score=3.5,
     )
 
-    # Test to_dict
+    # Test to_dict (mặc định không có average_predicted_score)
     output_dict = output.to_dict()
-    print(f"\nOutput dict keys: {list(output_dict.keys())}")
-    print(f"Number of common_reasons: {len(output_dict['common_reasons'])}")
+    assert "average_predicted_score" not in output_dict
+    print(f"\nOutput dict keys (default): {list(output_dict.keys())}")
 
-    # Test to_json
+    # Test to_dict với include_average_predicted=True
+    output_dict_full = output.to_dict(include_average_predicted=True)
+    assert output_dict_full["average_predicted_score"] == 3.5
+    print(f"Output dict keys (include_average): {list(output_dict_full.keys())}")
+
+    # Test to_json (mặc định ẩn average)
     output_json = output.to_json()
-    print(f"\nOutput JSON:\n{output_json}")
-
-    # Verify JSON is valid
     parsed = json.loads(output_json)
+    assert "average_predicted_score" not in parsed
     assert len(parsed["common_reasons"]) == 1
     assert parsed["total_students"] == 50
-    assert parsed["average_predicted_score"] == 3.5
     assert parsed["common_reasons"][0]["affected_students_count"] == 50
+
+    # Test to_json với include_average_predicted=True
+    output_json_full = output.to_json(include_average_predicted=True)
+    parsed_full = json.loads(output_json_full)
+    assert parsed_full["average_predicted_score"] == 3.5
 
     # Test from_explanation_dict
     explanation_dict = {

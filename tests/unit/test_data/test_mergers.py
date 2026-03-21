@@ -9,7 +9,37 @@ import pytest
 from ml_clo.data.mergers import (
     LECTURER_PLACEHOLDER,
     create_student_record_from_ids,
+    merge_attendance,
+    student_has_history,
 )
+
+
+class TestStudentHasHistory:
+    """Unit test cho student_has_history (Bước 3: Logic SV năm 1 vs 2+)."""
+
+    def test_has_history_true(self):
+        """SV có trong DiemTong → True."""
+        exam_df = pd.DataFrame({
+            "Student_ID": [19050006, 19050007],
+            "Subject_ID": ["INF0823", "INF0824"],
+            "Lecturer_ID": ["90316", "90317"],
+        })
+        assert student_has_history(exam_df, "19050006") == True
+        assert student_has_history(exam_df, 19050007) == True
+
+    def test_has_history_false(self):
+        """SV không có trong DiemTong → False."""
+        exam_df = pd.DataFrame({
+            "Student_ID": [19050006],
+            "Subject_ID": ["INF0823"],
+            "Lecturer_ID": ["90316"],
+        })
+        assert student_has_history(exam_df, "19050099") == False
+
+    def test_empty_or_none(self):
+        """exam_df rỗng hoặc None → False."""
+        assert student_has_history(pd.DataFrame(), "19050006") == False
+        assert student_has_history(None, "19050006") == False
 
 
 class TestCreateStudentRecordFromIds:
@@ -79,3 +109,55 @@ class TestCreateStudentRecordFromIds:
             lecturer_id="90316",
         )
         assert result["Student_ID"].iloc[0] == 19050009
+
+
+class TestMergeAttendance:
+    """Unit test cho merge_attendance (Bước 1, 2: điểm danh train/predict)."""
+
+    def test_merge_attendance_adds_attendance_rate(self):
+        """Merge attendance thêm cột attendance_rate."""
+        exam_df = pd.DataFrame({
+            "Student_ID": [19050006, 19050007],
+            "Subject_ID": ["INF0823", "INF0823"],
+            "Lecturer_ID": ["90316", "90316"],
+            "year": [2024, 2024],
+        })
+        att_df = pd.DataFrame({
+            "MSSV": [19050006, 19050007],
+            "Mã môn học": ["INF0823", "INF0823"],
+            "Niên khoá": ["2024-2025", "2024-2025"],
+            "Điểm danh": ["Có", "Vắng"],
+        })
+        merged = merge_attendance(exam_df, att_df)
+        assert "attendance_rate" in merged.columns
+        assert len(merged) == 2
+
+    def test_merge_attendance_missing_main_cols_raises(self):
+        """Thiếu cột trong main df → DataValidationError."""
+        from ml_clo.utils.exceptions import DataValidationError
+
+        exam_df = pd.DataFrame({"Student_ID": [1], "Subject_ID": ["X"]})  # thiếu year
+        att_df = pd.DataFrame({
+            "MSSV": [1],
+            "Mã môn học": ["X"],
+            "Niên khoá": ["2024"],
+        })
+        with pytest.raises(DataValidationError):
+            merge_attendance(exam_df, att_df)
+
+    def test_merge_attendance_year_column_param(self):
+        """Có thể chỉ định tên cột year khác."""
+        exam_df = pd.DataFrame({
+            "Student_ID": [19050006],
+            "Subject_ID": ["INF0823"],
+            "Lecturer_ID": ["90316"],
+            "semester_year": [2024],
+        })
+        att_df = pd.DataFrame({
+            "MSSV": [19050006],
+            "Mã môn học": ["INF0823"],
+            "Niên khoá": ["2024"],
+            "Điểm danh": ["Có"],
+        })
+        merged = merge_attendance(exam_df, att_df, year_column="semester_year")
+        assert "attendance_rate" in merged.columns

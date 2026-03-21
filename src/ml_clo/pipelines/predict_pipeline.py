@@ -20,13 +20,21 @@ from sklearn.preprocessing import LabelEncoder
 from ml_clo.data.encoders import encode_assessment_methods, encode_teaching_methods
 from ml_clo.data.loaders import (
     load_assessment_methods,
+    load_attendance,
     load_conduct_scores,
     load_demographics,
     load_exam_scores,
     load_study_hours,
     load_teaching_methods,
 )
-from ml_clo.data.mergers import create_student_record_from_ids, create_training_dataset
+from ml_clo.data.mergers import (
+    create_student_record_from_ids,
+    create_training_dataset,
+    merge_attendance,
+    merge_exam_and_conduct_scores,
+    merge_study_hours,
+    student_has_history,
+)
 from ml_clo.data.preprocessors import preprocess_exam_scores
 from ml_clo.features.feature_builder import build_all_features
 from ml_clo.models.ensemble_model import EnsembleModel
@@ -60,6 +68,7 @@ class PredictionPipeline:
         teaching_methods_path: Optional[str] = None,
         assessment_methods_path: Optional[str] = None,
         study_hours_path: Optional[str] = None,
+        attendance_path: Optional[str] = None,
     ):
         """Initialize prediction pipeline.
 
@@ -72,6 +81,7 @@ class PredictionPipeline:
             teaching_methods_path: Path PPGD (tùy chọn).
             assessment_methods_path: Path PPDG (tùy chọn).
             study_hours_path: Path tự học (tùy chọn).
+            attendance_path: Path điểm danh (tùy chọn).
 
         Raises:
             ModelLoadError: Nếu không tìm thấy file model.
@@ -97,6 +107,7 @@ class PredictionPipeline:
                 teaching_methods_path=teaching_methods_path,
                 assessment_methods_path=assessment_methods_path,
                 study_hours_path=study_hours_path,
+                attendance_path=attendance_path,
             )
 
     def load_data_cache(
@@ -107,6 +118,7 @@ class PredictionPipeline:
         teaching_methods_path: Optional[str] = None,
         assessment_methods_path: Optional[str] = None,
         study_hours_path: Optional[str] = None,
+        attendance_path: Optional[str] = None,
     ) -> None:
         """Load và cache data. Cần ít nhất exam_scores_path HOẶC (demographics_path + teaching_methods_path + assessment_methods_path)."""
         logger.info("Loading and caching data for prediction (one-time)")
@@ -130,6 +142,8 @@ class PredictionPipeline:
             cache["assessment_methods"] = encode_assessment_methods(em_df)
         if study_hours_path and Path(study_hours_path).exists():
             cache["study_hours"] = load_study_hours(study_hours_path)
+        if attendance_path and Path(attendance_path).exists():
+            cache["attendance"] = load_attendance(attendance_path)
         self._data_cache = cache
         logger.info("Data cache ready")
 
@@ -169,6 +183,7 @@ class PredictionPipeline:
         teaching_methods_path: Optional[str] = None,
         assessment_methods_path: Optional[str] = None,
         study_hours_path: Optional[str] = None,
+        attendance_path: Optional[str] = None,
     ) -> pd.DataFrame:
         """Load and prepare data for a single student.
 
@@ -178,6 +193,8 @@ class PredictionPipeline:
 
         if self._data_cache is not None:
             data = dict(self._data_cache)
+            if attendance_path and Path(attendance_path).exists():
+                data["attendance"] = load_attendance(attendance_path)
         else:
             data = {}
             if exam_scores_path and Path(exam_scores_path).exists():
@@ -199,6 +216,8 @@ class PredictionPipeline:
                 data["assessment_methods"] = encode_assessment_methods(em_df)
             if study_hours_path and Path(study_hours_path).exists():
                 data["study_hours"] = load_study_hours(study_hours_path)
+            if attendance_path and Path(attendance_path).exists():
+                data["attendance"] = load_attendance(attendance_path)
 
         exam_df = data.get("exam_scores")
         if exam_df is not None:
@@ -210,6 +229,27 @@ class PredictionPipeline:
                 & (exam_df["Subject_ID"] == _subj)
                 & (exam_df["Lecturer_ID"] == _lec)
             ].copy()
+
+            # SV năm 2+: có trong DiemTong → bắt buộc dùng exam data, không fallback
+            # SV năm 1: không có trong DiemTong → cho phép fallback
+            if len(student_data) == 0 and student_has_history(exam_df, student_id):
+                # SV có lịch sử nhưng chưa học môn này — tạo 1 dòng (sid, subj, lec), dùng exam_df làm history
+                exam_for_student = exam_df[exam_df["Student_ID"] == _sid]
+                year_val = (
+                    exam_for_student["year"].iloc[0]
+                    if "year" in exam_for_student.columns and exam_for_student["year"].notna().any()
+                    else 2024
+                )
+                student_data = pd.DataFrame([{
+                    "Student_ID": _sid,
+                    "Subject_ID": _subj,
+                    "Lecturer_ID": _lec,
+                    "exam_score": np.nan,
+                    "year": year_val,
+                }])
+                logger.info(
+                    f"SV năm 2+ (có lịch sử) nhưng chưa học môn {_subj}: dùng Điểm tổng, không fallback"
+                )
         else:
             def _has_valid(v):
                 return v is not None and (not isinstance(v, pd.DataFrame) or not v.empty)
@@ -223,6 +263,10 @@ class PredictionPipeline:
                     "Pass exam_scores_path or (demographics_path, teaching_methods_path, assessment_methods_path)."
                 )
             student_data = None
+            logger.warning(
+                "Không có exam_scores_path — không thể kiểm tra SV năm 1 vs năm 2+. "
+                "Để đảm bảo logic đúng, nên truyền --exam-scores khi có file DiemTong."
+            )
 
         if student_data is not None and len(student_data) > 0:
             full_exam_df = exam_df
@@ -233,8 +277,15 @@ class PredictionPipeline:
                 teaching_methods_df=data.get("teaching_methods"),
                 assessment_methods_df=data.get("assessment_methods"),
                 study_hours_df=data.get("study_hours"),
+                attendance_df=data.get("attendance"),
                 target_column="exam_score",
                 drop_missing_target=False,
+            )
+            training_df = build_all_features(
+                training_df,
+                conduct_history_df=data.get("conduct_scores"),
+                exam_history_df=full_exam_df,
+                study_hours_df=data.get("study_hours"),
             )
         else:
             # Fallback: tạo record từ nhân khẩu + PPGD/PPDG (SV/môn/GV mới không cần có trong DiemTong)
@@ -247,13 +298,13 @@ class PredictionPipeline:
                 assessment_methods_df=data.get("assessment_methods"),
                 year=2024,
             )
-            from ml_clo.data.mergers import merge_exam_and_conduct_scores, merge_study_hours
-
             full_exam_df = pd.DataFrame(columns=["Student_ID", "Subject_ID", "Lecturer_ID", "year", "exam_score"])
             if data.get("conduct_scores") is not None:
                 base_df = merge_exam_and_conduct_scores(base_df, data["conduct_scores"], year_column="year")
             if data.get("study_hours") is not None:
                 base_df = merge_study_hours(base_df, data["study_hours"], year_column="year")
+            if data.get("attendance") is not None:
+                base_df = merge_attendance(base_df, data["attendance"], year_column="year")
             training_df = build_all_features(
                 base_df,
                 conduct_history_df=data.get("conduct_scores"),
@@ -363,6 +414,7 @@ class PredictionPipeline:
         teaching_methods_path: Optional[str] = None,
         assessment_methods_path: Optional[str] = None,
         study_hours_path: Optional[str] = None,
+        attendance_path: Optional[str] = None,
         actual_clo_score: Optional[float] = None,
     ) -> IndividualAnalysisOutput:
         """Predict CLO score and generate explanation for a student.
@@ -383,6 +435,7 @@ class PredictionPipeline:
             teaching_methods_path: Path PPGD (optional)
             assessment_methods_path: Path PPDG (optional)
             study_hours_path: Path tự học (optional)
+            attendance_path: Path điểm danh (optional)
             actual_clo_score: Điểm CLO thực (môn đã đỗ) — nếu có thì output ưu tiên giá trị này
 
         Returns:
@@ -419,6 +472,7 @@ class PredictionPipeline:
             teaching_methods_path=teaching_methods_path,
             assessment_methods_path=assessment_methods_path,
             study_hours_path=study_hours_path,
+            attendance_path=attendance_path,
         )
 
         # Prepare features

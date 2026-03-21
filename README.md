@@ -100,7 +100,7 @@ export PYTHONPATH="${PYTHONPATH}:$(pwd)/src"
 # Chỉ điểm thi
 python scripts/train.py --exam-scores data/DiemTong.xlsx --output models/model.joblib
 
-# Đủ nguồn dữ liệu
+# Đủ nguồn dữ liệu (gồm điểm danh)
 python scripts/train.py \
   --exam-scores data/DiemTong.xlsx \
   --conduct-scores data/diemrenluyen.xlsx \
@@ -108,6 +108,7 @@ python scripts/train.py \
   --teaching-methods data/PPGDfull.xlsx \
   --assessment-methods data/PPDGfull.xlsx \
   --study-hours data/tuhoc.xlsx \
+  --attendance "data/Dữ liệu điểm danh Khoa FIRA.xlsx" \
   --output models/model.joblib
 ```
 
@@ -137,7 +138,7 @@ python scripts/predict.py \
   --assessment-methods data/PPDGfull.xlsx \
   --actual-score 4.2
 
-# Có DiemTong — dùng exam-scores (tùy chọn)
+# Có DiemTong — dùng exam-scores + điểm danh (tùy chọn)
 python scripts/predict.py \
   --model models/model.joblib \
   --student-id 19050006 \
@@ -146,17 +147,20 @@ python scripts/predict.py \
   --exam-scores data/DiemTong.xlsx \
   --demographics data/nhankhau.xlsx \
   --teaching-methods data/PPGDfull.xlsx \
-  --assessment-methods data/PPDGfull.xlsx
+  --assessment-methods data/PPDGfull.xlsx \
+  --attendance "data/Dữ liệu điểm danh Khoa FIRA.xlsx"
 ```
 
 Output JSON: `predicted_clo`, `actual_clo_score` (nếu có), lý do, giải pháp.
+
+**Khuyến nghị cho kết quả cá nhân hóa:** Truyền đủ nguồn dữ liệu khi predict (`--exam-scores`, `--conduct-scores`, `--demographics`, `--attendance`) để mỗi sinh viên nhận điểm dự đoán khác nhau theo đúng đặc điểm. Thiếu nguồn có thể dẫn đến nhiều SV nhận cùng điểm. Kiểm tra: `python scripts/test_prediction_differentiation.py --model models/model.joblib --exam-scores data/DiemTong.xlsx ...`
 
 ### 3. Phân tích lớp
 
 **Chế độ chính (khuyến nghị):** `--scores-file` — file CSV/JSON danh sách điểm CLO (từ API/backend).
 
 ```bash
-# Phân tích từ file điểm CLO
+# Phân tích từ file điểm CLO (gồm điểm danh khi có MSSV)
 python scripts/analyze_class.py \
   --model models/model.joblib \
   --subject-id INF0823 \
@@ -165,6 +169,7 @@ python scripts/analyze_class.py \
   --demographics data/nhankhau.xlsx \
   --teaching-methods data/PPGDfull.xlsx \
   --assessment-methods data/PPDGfull.xlsx \
+  --attendance "data/Dữ liệu điểm danh Khoa FIRA.xlsx" \
   --output result.json
 
 # Chỉ danh sách điểm (không MSSV) — phân tích phân phối, không SHAP
@@ -176,6 +181,8 @@ python scripts/analyze_class.py \
 ```
 
 **Chế độ cũ (deprecated):** `--exam-scores` (filter DiemTong) — vẫn chạy được nhưng không khuyến nghị.
+
+**Tùy chọn output:** Mặc định JSON output không chứa `average_predicted_score`. Dùng `--include-average-predicted` nếu cần hiện field này (ví dụ debug).
 
 Output: `ClassAnalysisOutput`.
 

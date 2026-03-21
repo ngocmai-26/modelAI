@@ -1,0 +1,268 @@
+================================================================================
+BÁO CÁO FEEDBACK — HỆ THỐNG DỰ ĐOÁN CLO & XAI
+================================================================================
+Ngày lập: 2026-03-15
+Nguồn: Feedback từ người dùng / đánh giá hệ thống
+
+================================================================================
+PHẦN 1. MÔ TẢ KỲ VỌNG ĐẦU RA (VÍ DỤ MẪU)
+================================================================================
+
+--- 1.1. Dự đoán cấp CÁ NHÂN ---
+
+Kịch bản: Sinh viên có điểm CLO các môn dao động từ 2 → 3.
+
+Kết quả mong muốn:
+  • Dự đoán điểm: "Dự đoán điểm của bạn tầm 2.3"
+  
+  • Nguyên nhân 1: "Bạn thường không tham gia đầy đủ các buổi học, thường vắng học 
+    các môn vào buổi 1 và 2" 
+    → Nguồn dữ liệu: File điểm danh cá nhân
+    
+  • Nguyên nhân 2: "Bạn thường không tham gia các hoạt động để rèn luyện"
+    → Nguồn dữ liệu: File điểm danh
+    
+  • Nguyên nhân 3: "Do giới tính ảnh hưởng đến kết quả của bạn"
+    → Nguồn dữ liệu: File nhân khẩu
+    
+  • Cách khắc phục 1, 2, 3 (tương ứng từng nguyên nhân)
+
+--- 1.2. Dự đoán cấp LỚP ---
+
+Kịch bản: Phân tích theo lớp.
+
+Kết quả mong muốn:
+  • Dự đoán điểm: "Dự đoán điểm của bạn tầm 2.3" (hoặc mức tương đương lớp)
+  
+  • Nguyên nhân 1: "Phần lớn sinh viên thường không tham gia đầy đủ các buổi học, 
+    thường vắng học các môn vào buổi 1 và 2"
+    → Nguồn dữ liệu: File điểm danh của lớp
+    
+  • Nguyên nhân 2: "Các bạn trong lớp không tích đủ giờ thư viện, tự học không cao"
+    → Nguồn dữ liệu: File tự học / giờ thư viện
+    
+  • Nguyên nhân 3: "Do phần lớn các bạn trong lớp có trung bình học từ [...]"
+    → Nguồn dữ liệu: Lịch sử học tập (Điểm tổng)
+    
+  • Cách khắc phục 1, 2, 3 (tương ứng từng nguyên nhân)
+
+================================================================================
+PHẦN 2. CÁC ĐIỂM CẦN SỬA (YÊU CẦU CẢI TIẾN)
+================================================================================
+
+--- 2.1. Bổ sung File Điểm danh vào bước Huấn luyện (Train) ---
+
+  Vấn đề:
+    Hiện tại quá trình huấn luyện mô hình đang bị thiếu dữ liệu về điểm danh.
+
+  Yêu cầu:
+    Phải đưa file Điểm danh vào tập dữ liệu huấn luyện để mô hình hiểu được mối 
+    liên hệ giữa việc đi học đầy đủ và kết quả học tập.
+
+
+--- 2.2. Tích hợp Đa nguồn Dữ liệu cho Dự đoán (Cá nhân & Lớp) ---
+
+  Vấn đề:
+    Khi chạy dự đoán cho cả cá nhân và tập thể lớp, hệ thống đang bỏ qua các yếu tố 
+    quan trọng.
+
+  Yêu cầu:
+    Cần kết hợp đồng thời các file:
+      • Điểm danh
+      • Tự học (giờ tại thư viện)
+      • Điểm rèn luyện
+      • Nhân khẩu học
+      • Phương pháp giảng dạy (PPGD)
+      • Phương pháp đánh giá (PPDG)
+    vào quá trình dự đoán.
+
+
+--- 2.3. Logic sử dụng File "Điểm tổng" (Lịch sử học tập) ---
+
+  Vấn đề:
+    Hiện tại hệ thống đang mặc định không dùng file Điểm tổng, dẫn đến mất đi dữ 
+    liệu lịch sử quan trọng.
+
+  Yêu cầu điều chỉnh:
+    • Đối với Sinh viên năm 1: Chỉ khi nào hoàn toàn không có dữ liệu lịch sử mới 
+      được phép không dùng file Điểm tổng.
+    • Đối với các trường hợp khác: Bắt buộc phải sử dụng file Điểm tổng để làm căn 
+      cứ dự đoán cho cả Cá nhân và Lớp.
+
+
+--- 2.4. Khắc phục lỗi "Kết quả trùng lặp" ở Dự đoán Cá nhân ---
+
+  Vấn đề:
+    Kết quả dự đoán trả về cho các sinh viên khác nhau lại cho ra kết quả giống 
+    hệt nhau.
+
+  Yêu cầu:
+    Kiểm tra lại thuật toán và trọng số (weights) để đảm bảo tính cá nhân hóa. 
+    Mỗi sinh viên với các chỉ số đầu vào khác nhau phải cho ra kết quả dự đoán 
+    riêng biệt.
+
+
+--- 2.5. Dự đoán dựa trên Nguyên nhân (Explainable AI) ---
+
+  Vấn đề:
+    Cần biết lý do tại sao sinh viên có kết quả như vậy thay vì chỉ đưa ra con số.
+
+  Yêu cầu:
+    Mô hình phải truy xuất dữ liệu từ các file thành phần để giải thích nguyên nhân:
+
+    • Điểm tổng: Do lịch sử học tập tốt hay kém.
+    • Tự học: Do thời gian ở thư viện ít hay nhiều.
+    • Rèn luyện: Do mức độ tham gia hoạt động phong trào.
+    • Điểm danh: Do vắng học hay đi học đầy đủ.
+    • Nhân khẩu: Xem xét yếu tố dân tộc, tôn giáo, giới tính hoặc điểm đầu vào 
+      có ảnh hưởng không.
+    • PPGD & PPDG: Đánh giá xem phương pháp dạy và cách kiểm tra có phù hợp với 
+      sinh viên chưa.
+
+
+--- 2.6. Điều chỉnh Dự đoán cấp Lớp và Thang điểm ---
+
+  Vấn đề:
+    • Kết quả dự đoán lớp hiện tại đang bị sai lệch (lớp học tốt nhưng dự đoán lại 
+      ra kém).
+    • Hiển thị chỉ số không cần thiết.
+
+  Yêu cầu:
+    • Thang điểm: Chuyển sang dự đoán theo thang điểm 6.
+    • Lọc dữ liệu đầu ra: Loại bỏ chỉ số "Average predicted CLO score" khi dự đoán 
+      cấp lớp.
+    • Độ chính xác: Hiệu chỉnh lại mô hình để phản ánh đúng thực tế năng lực của lớp 
+      (khắc phục việc lớp giỏi nhưng bị dự đoán kém).
+
+================================================================================
+PHẦN 3. TỔNG HỢP THEO NHÓM
+================================================================================
+
+| Nhóm                    | Mục                | Nội dung chính                              |
+|-------------------------|--------------------|---------------------------------------------|
+| Dữ liệu Training        | 2.1                | Bổ sung Điểm danh vào train                 |
+| Dữ liệu Predict         | 2.2, 2.3           | Đa nguồn; logic dùng Điểm tổng              |
+| Thuật toán              | 2.4, 2.6 (phần 3)  | Kết quả trùng lặp; độ chính xác lớp        |
+| Explainable AI (XAI)    | 2.5                | Map nguyên nhân ↔ nguồn dữ liệu            |
+| Output / UX             | 2.6 (phần 1, 2)    | Thang 6; loại bỏ chỉ số không cần thiết    |
+
+================================================================================
+PHẦN 4. ĐÁNH GIÁ TÍNH CHÍNH XÁC CỦA FEEDBACK
+================================================================================
+
+Đối chiếu với implementation hiện tại (src/ml_clo, scripts/) — kiểm tra ngày 2026-03.
+
+--- 4.1. Mục 2.1 — Điểm danh trong Train ---
+
+  Đánh giá: ĐÚNG
+
+  Hiện trạng:
+    • scripts/train.py KHÔNG có tham số --attendance
+    • train_pipeline.load_data() KHÔNG load điểm danh
+    • create_training_dataset() trong mergers CÓ hỗ trợ attendance_df, nhưng
+      train_pipeline KHÔNG truyền vào
+    • Feature "Chuyên cần" (attendance_rate) có trong config nhưng luôn NaN/thiếu
+      vì không merge attendance
+
+  Kết luận: Feedback chính xác. Cần bổ sung --attendance vào train pipeline.
+
+
+--- 4.2. Mục 2.2 — Đa nguồn dữ liệu cho Predict ---
+
+  Đánh giá: ĐÚNG (thiếu Điểm danh)
+
+  Hiện trạng:
+    • predict_pipeline HỖ TRỢ: exam_scores, conduct, demographics, PPGD, PPDG, study_hours
+    • KHÔNG HỖ TRỢ: attendance (điểm danh)
+    • scripts/predict.py không có --attendance
+
+  Kết luận: Feedback chính xác. Thiếu điểm danh trong predict.
+
+
+--- 4.3. Mục 2.3 — Logic Điểm tổng ---
+
+  Đánh giá: MỘT PHẦN ĐÚNG
+
+  Hiện trạng:
+    • Yêu cầu mới (đã triển khai): cho phép predict KHÔNG dùng exam_scores khi có
+      demographics + PPGD + PPDG (fallback create_student_record_from_ids)
+    • KHÔNG CÓ logic phân biệt "Sinh viên năm 1" vs "các trường hợp khác"
+    • Không có khái niệm "năm học" để xác định SV năm 1
+
+  Kết luận: Feedback đúng về việc cần điều chỉnh logic. Phần "SV năm 1" mới được
+  không dùng Điểm tổng — cần thiết kế thêm (lấy năm từ nhân khẩu/đăng ký).
+
+
+--- 4.4. Mục 2.4 — Kết quả trùng lặp ---
+
+  Đánh giá: CẦN KIỂM CHỨNG
+
+  Giải thích có thể:
+    • Khi dùng fallback (không có exam_scores): nhiều SV có cùng demographics,
+      PPGD/PPDG → features gần giống → dự đoán có thể trùng
+    • Thiếu conduct, study_hours, attendance → các feature quan trọng = 0/NaN
+      → mất tính phân biệt
+    • Cần test thực tế với nhiều SV khác nhau để xác nhận
+
+  Kết luận: Feedback có thể đúng. Cần kiểm tra với data đầy đủ và đối chiếu
+  kết quả theo từng nhóm feature.
+
+
+--- 4.5. Mục 2.5 — XAI map nguyên nhân ↔ nguồn dữ liệu ---
+
+  Đánh giá: MỘT PHẦN ĐÚNG
+
+  Hiện trạng:
+    • XAI dùng SHAP, gom theo nhóm sư phạm: Tự học, Chuyên cần, Rèn luyện,
+      Học lực, Giảng dạy, Đánh giá, Cá nhân
+    • reason_text sinh từ template, KHÔNG trích dẫn rõ "dựa vào file điểm danh",
+      "dựa vào file nhân khẩu" như ví dụ mong muốn
+    • Nếu không có attendance trong train/predict → nhóm "Chuyên cần" không phản
+      ánh đúng thực tế (feature luôn thiếu)
+
+  Kết luận: Feedback đúng về mong muốn. Cần cải thiện template/cách sinh lý do
+  để gắn rõ nguồn dữ liệu (điểm danh, tự học, nhân khẩu, ...).
+
+
+--- 4.6. Mục 2.6 — Thang điểm & Dự đoán lớp ---
+
+  Đánh giá: MỘT PHẦN ĐÚNG
+
+  Hiện trạng:
+    • Thang điểm 6: ĐÃ CÓ (exam_score convert 10→6, output 0–6)
+    • "Average predicted CLO score": VẪN CÓ trong ClassAnalysisOutput
+      (average_predicted_score). Feedback yêu cầu loại bỏ — cần quyết định UX
+    • "Lớp giỏi nhưng dự đoán kém": cần kiểm chứng với data thực. Có thể do:
+      thiếu attendance, thiếu lịch sử học tập, hoặc bias trong tập train
+
+  Kết luận: Thang 6 đã đúng. Loại bỏ average_predicted_score là yêu cầu UX.
+  Độ chính xác lớp cần đánh giá thực nghiệm.
+
+
+--- 4.7. Tổng kết đánh giá ---
+
+| Mục | Đánh giá      | Ghi chú                                      |
+|-----|---------------|-----------------------------------------------|
+| 2.1 | ĐÚNG          | Điểm danh chưa có trong train                 |
+| 2.2 | ĐÚNG          | Thiếu điểm danh trong predict                 |
+| 2.3 | MỘT PHẦN ĐÚNG | Logic SV năm 1 chưa có; fallback đã có        |
+| 2.4 | CẦN KIỂM CHỨNG| Có thể do data thiếu / features giống nhau   |
+| 2.5 | MỘT PHẦN ĐÚNG | XAI có groups; chưa gắn rõ nguồn dữ liệu    |
+| 2.6 | MỘT PHẦN ĐÚNG | Thang 6 OK; average_predicted cần quyết định; độ chính xác cần test |
+
+================================================================================
+PHẦN 5. TRẠNG THÁI XỬ LÝ (cập nhật sau triển khai)
+================================================================================
+
+| Mục   | Trạng thái | Ghi chú                                           |
+|-------|------------|---------------------------------------------------|
+| 2.1   | [x] Đã xử lý | --attendance trong train; merge attendance vào dataset |
+| 2.2   | [x] Đã xử lý | --attendance trong predict & analyze_class          |
+| 2.3   | [x] Đã xử lý | Logic SV năm 1 vs 2+; student_has_history           |
+| 2.4   | [x] Đã xử lý | Script kiểm tra phân biệt; test_prediction_differentiation |
+| 2.5   | [x] Đã xử lý | XAI gắn nguồn dữ liệu (DATA_SOURCE_MAPPING)         |
+| 2.6   | [x] Đã xử lý | Thang 6 OK; ẩn average_predicted_score (tùy chọn)   |
+
+================================================================================
+HẾT BÁO CÁO
+================================================================================

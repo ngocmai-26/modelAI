@@ -240,8 +240,12 @@ class ClassAnalysisOutput:
                     f"got {reason.average_impact_percentage}"
                 )
 
-    def to_dict(self) -> dict:
+    def to_dict(self, include_average_predicted: bool = False) -> dict:
         """Convert to dictionary for JSON serialization.
+
+        Args:
+            include_average_predicted: Nếu False (mặc định), không đưa average_predicted_score
+                vào output (theo feedback: ẩn khi phân tích lớp).
 
         Returns:
             Dictionary representation
@@ -257,24 +261,32 @@ class ClassAnalysisOutput:
             result["lecturer_id"] = self.lecturer_id
         if self.total_students is not None:
             result["total_students"] = self.total_students
-        if self.average_predicted_score is not None:
+        if include_average_predicted and self.average_predicted_score is not None:
             result["average_predicted_score"] = round(
                 self.average_predicted_score, 2
             )
 
         return result
 
-    def to_json(self, indent: Optional[int] = 2) -> str:
+    def to_json(
+        self,
+        indent: Optional[int] = 2,
+        include_average_predicted: bool = False,
+    ) -> str:
         """Convert to JSON string.
 
         Args:
             indent: JSON indentation (default: 2)
+            include_average_predicted: Nếu False (mặc định), không đưa average_predicted_score
+                vào output (theo feedback: ẩn khi phân tích lớp).
 
         Returns:
             JSON string representation
         """
         return json.dumps(
-            self.to_dict(), ensure_ascii=False, indent=indent
+            self.to_dict(include_average_predicted=include_average_predicted),
+            ensure_ascii=False,
+            indent=indent,
         )
 
     @classmethod

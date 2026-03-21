@@ -6,7 +6,7 @@ Uses rule-based templates (no ML, no LLMs) to map XAI outputs to pedagogical rea
 
 from typing import Dict, List, Optional, Tuple
 
-from ml_clo.config.xai_config import REASON_CONFIG
+from ml_clo.config.xai_config import DATA_SOURCE_MAPPING, REASON_CONFIG
 from ml_clo.reasoning.solution_mapper import get_solutions_for_reasons
 from ml_clo.reasoning.templates import format_reason_with_impact, get_reason_template
 from ml_clo.utils.logger import get_logger
@@ -40,8 +40,13 @@ def generate_reasons(
         # Get reason template
         reason_text = get_reason_template(group_name, impact_percentage, context)
 
-        # Format with impact percentage
-        formatted_reason = format_reason_with_impact(reason_text, impact_percentage)
+        # Get data source for this group (e.g. "điểm danh", "nhân khẩu")
+        data_source = DATA_SOURCE_MAPPING.get(group_name)
+
+        # Format with impact percentage and data source
+        formatted_reason = format_reason_with_impact(
+            reason_text, impact_percentage, data_source=data_source
+        )
 
         reason_dict = {
             "group_name": group_name,
@@ -108,6 +113,14 @@ def generate_summary_reason(
     return summary
 
 
+def _append_data_source_to_reason(reason_text: str, group_name: str) -> str:
+    """Append '(dựa vào file X)' to reason_text based on group."""
+    data_source = DATA_SOURCE_MAPPING.get(group_name)
+    if data_source:
+        return f"{reason_text} (dựa vào file {data_source})"
+    return reason_text
+
+
 def generate_explanation_from_distribution(
     scores: List[float],
     context: str = "class",
@@ -142,10 +155,13 @@ def generate_explanation_from_distribution(
 
     # Điểm thấp
     if mean_score < 3.5:
+        base_text = (
+            f"Điểm trung bình lớp thấp ({mean_score:.1f}/6). "
+            f"Có {low_count}/{total} sinh viên ({low_pct:.0f}%) có điểm dưới 3.0."
+        )
         reasons.append({
             "group_name": "Học lực",
-            "reason_text": f"Điểm trung bình lớp thấp ({mean_score:.1f}/6). "
-            f"Có {low_count}/{total} sinh viên ({low_pct:.0f}%) có điểm dưới 3.0.",
+            "reason_text": _append_data_source_to_reason(base_text, "Học lực"),
             "impact_percentage": min(100, max(50, 100 - mean_score * 20)),
             "solutions": [
                 "Ôn tập lại kiến thức nền tảng",
@@ -156,9 +172,13 @@ def generate_explanation_from_distribution(
 
     # Phân tán cao
     if std_score > 1.2 and total > 5:
+        base_text = (
+            f"Phân tán điểm cao (độ lệch chuẩn {std_score:.1f}). "
+            "Trình độ sinh viên trong lớp chênh lệch nhiều."
+        )
         reasons.append({
             "group_name": "Chênh lệch trình độ",
-            "reason_text": f"Phân tán điểm cao (độ lệch chuẩn {std_score:.1f}). Trình độ sinh viên trong lớp chênh lệch nhiều.",
+            "reason_text": _append_data_source_to_reason(base_text, "Chênh lệch trình độ"),
             "impact_percentage": min(80, int(std_score * 30)),
             "solutions": [
                 "Phân nhóm học theo trình độ",
@@ -169,10 +189,13 @@ def generate_explanation_from_distribution(
 
     # Nếu không có lý do cụ thể
     if not reasons:
+        base_text = (
+            f"Điểm trung bình: {mean_score:.1f}, trung vị: {median_score:.1f}. "
+            + ("Phân phối điểm ổn định." if std_score < 1.0 else f"Độ phân tán: {std_score:.1f}.")
+        )
         reasons.append({
             "group_name": "Tổng quan",
-            "reason_text": f"Điểm trung bình: {mean_score:.1f}, trung vị: {median_score:.1f}. "
-            f"Phân phối điểm ổn định." if std_score < 1.0 else f"Độ phân tán: {std_score:.1f}.",
+            "reason_text": _append_data_source_to_reason(base_text, "Tổng quan"),
             "impact_percentage": 30,
             "solutions": ["Duy trì phương pháp giảng dạy hiện tại", "Theo dõi tiến độ lớp"],
         })

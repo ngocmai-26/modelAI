@@ -89,6 +89,20 @@ PEDAGOGICAL_GROUP_PATTERNS: Dict[str, list] = {
     ],
 }
 
+# Mapping: pedagogical group -> data source (for XAI reason text)
+# Dùng trong reason_text: "(dựa vào file X)"
+DATA_SOURCE_MAPPING: Dict[str, str] = {
+    "Chuyên cần": "điểm danh",
+    "Tự học": "tự học",
+    "Rèn luyện": "điểm rèn luyện",
+    "Học lực": "điểm tổng",
+    "Giảng dạy": "PPGD",
+    "Đánh giá": "PPDG",
+    "Cá nhân": "nhân khẩu",
+    "Chênh lệch trình độ": "điểm tổng",
+    "Tổng quan": "phân phối điểm",
+}
+
 # Impact percentage calculation rules
 IMPACT_CONFIG: Dict[str, Any] = {
     # Method for calculating impact percentage

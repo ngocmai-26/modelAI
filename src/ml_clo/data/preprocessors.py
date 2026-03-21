@@ -370,6 +370,68 @@ def handle_missing_values(
     return df
 
 
+def ensure_year_column(df: pd.DataFrame, year_column: str = "year") -> pd.DataFrame:
+    """Ensure year column exists and has valid numeric values.
+
+    Derives year from semester_year, Niên khoá, Năm học, or registration_date if
+    year is missing or all NaN. Required for merging with conduct, attendance, study_hours.
+
+    Args:
+        df: DataFrame (exam scores or similar)
+        year_column: Name of year column (default: "year")
+
+    Returns:
+        DataFrame with year column populated
+    """
+    df = df.copy()
+    if year_column not in df.columns:
+        df[year_column] = np.nan
+
+    year_vals = pd.to_numeric(df[year_column], errors="coerce")
+    has_valid_year = year_vals.notna().any()
+
+    if not has_valid_year:
+        # Try alternative columns (Vietnamese or English)
+        for src_col, fmt in [
+            ("semester_year", "range"),  # "2021-2022" -> 2021
+            ("Niên khoá", "range"),
+            ("Năm học", "range"),
+            ("registration_date", "date"),
+        ]:
+            if src_col not in df.columns:
+                continue
+            if fmt == "range":
+                extracted = df[src_col].astype(str).str.split("-").str[0]
+                extracted = pd.to_numeric(extracted, errors="coerce")
+            else:  # date
+                try:
+                    # dayfirst=True cho format dd/mm/yyyy (phổ biến tại VN)
+                    dates = pd.to_datetime(df[src_col], errors="coerce", dayfirst=True)
+                    extracted = dates.dt.year
+                except Exception:
+                    extracted = pd.Series([np.nan] * len(df), dtype=float)
+            if extracted.notna().any():
+                df[year_column] = extracted
+                logger.info(
+                    f"Derived year from column '{src_col}': "
+                    f"{int(extracted.notna().sum())} valid values"
+                )
+                break
+
+    # Final fallback: fill remaining NaN with default
+    if df[year_column].isna().all() or df[year_column].isna().any():
+        default_year = 2024
+        fill_count = int(df[year_column].isna().sum())
+        if fill_count > 0:
+            df.loc[df[year_column].isna(), year_column] = default_year
+            logger.warning(
+                f"Filled {fill_count} rows with default year={default_year} "
+                "(year was missing or invalid; merge with conduct/attendance may be limited)"
+            )
+    df[year_column] = pd.to_numeric(df[year_column], errors="coerce")
+    return df
+
+
 def preprocess_exam_scores(
     df: pd.DataFrame,
     convert_to_clo: bool = True,
@@ -413,6 +475,9 @@ def preprocess_exam_scores(
     # Step 5: Handle missing values in key columns
     key_columns = ["Student_ID", "Subject_ID", "Lecturer_ID", "exam_score"]
     df = handle_missing_values(df, strategy="drop", columns=key_columns)
+
+    # Step 6: Ensure year column (required for merging with conduct, attendance, study_hours)
+    df = ensure_year_column(df, year_column="year")
 
     logger.info(f"Preprocessing complete: {len(df)} records ready for feature engineering")
     return df

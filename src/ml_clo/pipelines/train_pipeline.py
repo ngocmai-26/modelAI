@@ -20,6 +20,7 @@ from ml_clo.config.model_config import TRAINING_CONFIG
 from ml_clo.data.encoders import encode_assessment_methods, encode_teaching_methods
 from ml_clo.data.loaders import (
     load_assessment_methods,
+    load_attendance,
     load_conduct_scores,
     load_demographics,
     load_exam_scores,
@@ -71,6 +72,7 @@ class TrainingPipeline:
         teaching_methods_path: Optional[str] = None,
         assessment_methods_path: Optional[str] = None,
         study_hours_path: Optional[str] = None,
+        attendance_path: Optional[str] = None,
     ) -> Dict[str, pd.DataFrame]:
         """Load all data sources.
 
@@ -124,6 +126,10 @@ class TrainingPipeline:
             data["study_hours"] = load_study_hours(study_hours_path)
             logger.info(f"Loaded study hours: {len(data['study_hours'])} records")
 
+        if attendance_path and Path(attendance_path).exists():
+            data["attendance"] = load_attendance(attendance_path)
+            logger.info(f"Loaded attendance: {len(data['attendance'])} records")
+
         return data
 
     def prepare_training_dataset(
@@ -146,6 +152,7 @@ class TrainingPipeline:
         tm_df = data.get("teaching_methods")
         em_df = data.get("assessment_methods")
         study_df = data.get("study_hours")
+        attendance_df = data.get("attendance")
 
         # Merge all data
         training_df = create_training_dataset(
@@ -155,6 +162,7 @@ class TrainingPipeline:
             teaching_methods_df=tm_df,
             assessment_methods_df=em_df,
             study_hours_df=study_df,
+            attendance_df=attendance_df,
             target_column="exam_score",
             drop_missing_target=True,
         )
@@ -397,6 +405,7 @@ class TrainingPipeline:
         teaching_methods_path: Optional[str] = None,
         assessment_methods_path: Optional[str] = None,
         study_hours_path: Optional[str] = None,
+        attendance_path: Optional[str] = None,
     ) -> Tuple[EnsembleModel, Dict[str, float]]:
         """Run complete training pipeline.
 
@@ -408,6 +417,7 @@ class TrainingPipeline:
             teaching_methods_path: Path to teaching methods file (optional)
             assessment_methods_path: Path to assessment methods file (optional)
             study_hours_path: Path to study hours file (optional)
+            attendance_path: Path to attendance (điểm danh) file (optional)
 
         Returns:
             Tuple of (trained_model, evaluation_metrics)
@@ -422,6 +432,7 @@ class TrainingPipeline:
             teaching_methods_path=teaching_methods_path,
             assessment_methods_path=assessment_methods_path,
             study_hours_path=study_hours_path,
+            attendance_path=attendance_path,
         )
 
         # Step 2: Prepare training dataset

@@ -8,6 +8,7 @@ from ml_clo.data.preprocessors import (
     clean_exam_score,
     convert_score_10_to_6,
     create_result_column,
+    ensure_year_column,
     handle_missing_values,
     preprocess_exam_scores,
     standardize_lecturer_id,
@@ -183,4 +184,47 @@ class TestPreprocessExamScores:
         assert "exam_score" in result.columns
         assert result["exam_score"].max() <= 6.0
         assert "Result" in result.columns
+        assert "year" in result.columns
+        assert result["year"].notna().all()
+
+
+class TestEnsureYearColumn:
+    """Test ensure_year_column function."""
+
+    def test_fills_nan_year_with_default(self):
+        """When year is all NaN, fill with default 2024."""
+        df = pd.DataFrame({
+            "Student_ID": [1, 2],
+            "year": [np.nan, np.nan],
+        })
+        result = ensure_year_column(df)
+        assert result["year"].tolist() == [2024.0, 2024.0]
+
+    def test_derives_from_semester_year(self):
+        """When semester_year exists, derive year from it."""
+        df = pd.DataFrame({
+            "Student_ID": [1, 2],
+            "semester_year": ["2023-2024", "2022-2023"],
+        })
+        result = ensure_year_column(df)
+        assert result["year"].tolist() == [2023.0, 2022.0]
+
+    def test_preserves_existing_year(self):
+        """When year has valid values, preserve them."""
+        df = pd.DataFrame({
+            "Student_ID": [1, 2],
+            "year": [2022.0, 2023.0],
+        })
+        result = ensure_year_column(df)
+        assert result["year"].tolist() == [2022.0, 2023.0]
+
+    def test_creates_year_if_missing(self):
+        """When year column doesn't exist, create and fill."""
+        df = pd.DataFrame({
+            "Student_ID": [1, 2],
+        })
+        result = ensure_year_column(df)
+        assert "year" in result.columns
+        assert result["year"].notna().all()
+        assert result["year"].tolist() == [2024.0, 2024.0]
 

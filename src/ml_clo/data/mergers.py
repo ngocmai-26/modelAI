@@ -20,6 +20,25 @@ logger = get_logger(__name__)
 LECTURER_PLACEHOLDER = "__UNKNOWN__"
 
 
+def student_has_history(exam_df: pd.DataFrame, student_id: str) -> bool:
+    """Kiểm tra sinh viên có lịch sử trong DiemTong (đã học ít nhất 1 môn).
+
+    SV năm 2+: có ít nhất 1 bản ghi trong DiemTong.
+    SV năm 1: không có bản ghi nào.
+
+    Args:
+        exam_df: DataFrame điểm thi (đã preprocess, có cột Student_ID)
+        student_id: Mã sinh viên (str hoặc int)
+
+    Returns:
+        True nếu sinh viên có trong exam_df, False nếu không
+    """
+    if exam_df is None or exam_df.empty or "Student_ID" not in exam_df.columns:
+        return False
+    _sid = int(student_id) if isinstance(student_id, str) and str(student_id).isdigit() else student_id
+    return (exam_df["Student_ID"] == _sid).any()
+
+
 def create_student_record_from_ids(
     student_id: str,
     subject_id: str,
@@ -403,9 +422,15 @@ def merge_attendance(
     # Fallback: Năm học -> year (một số file dùng Năm học thay Niên khoá)
     if "year" not in attendance_df.columns and "Năm học" in attendance_df.columns:
         attendance_df["year"] = attendance_df["Năm học"]
-    # Fallback: Tên môn học -> Subject_ID khi thiếu Mã môn học (giá trị có thể không khớp khi merge)
-    if "Subject_ID" not in attendance_df.columns and "Tên môn học" in attendance_df.columns:
-        attendance_df["Subject_ID"] = attendance_df["Tên môn học"].astype(str).str.strip()
+    # Fallback: Tên môn học -> Subject_ID khi thiếu Mã môn học
+    # Lưu ý: Tên môn học (tên) không khớp Subject_ID (mã) trong exam → merge theo Student_ID+year
+    use_subject_in_merge = "Mã môn học" in attendance_df.columns
+    if "Subject_ID" not in attendance_df.columns:
+        if "Mã nhóm" in attendance_df.columns:
+            attendance_df["Subject_ID"] = attendance_df["Mã nhóm"].astype(str).str.strip()
+        elif "Tên môn học" in attendance_df.columns:
+            attendance_df["Subject_ID"] = attendance_df["Tên môn học"].astype(str).str.strip()
+            use_subject_in_merge = False  # Tên môn ≠ mã môn trong exam
 
     # Extract year from Niên khoá/Năm học if needed (e.g., "2024-2025" -> 2024)
     if "year" in attendance_df.columns:
@@ -446,10 +471,21 @@ def merge_attendance(
             "Phép": 0.0,
         }).fillna(0.0)
 
-        # Aggregate by Student_ID, Subject_ID, year
-        attendance_agg = attendance_df.groupby(["Student_ID", "Subject_ID", "year"]).agg({
-            "attendance_status": "mean",  # Average attendance rate
-        }).reset_index()
+        if use_subject_in_merge:
+            # Aggregate by Student_ID, Subject_ID, year (có Mã môn học)
+            attendance_agg = attendance_df.groupby(["Student_ID", "Subject_ID", "year"]).agg({
+                "attendance_status": "mean",
+            }).reset_index()
+            merge_on = ["Student_ID", "Subject_ID", year_column]
+        else:
+            # Chỉ có Tên môn học: aggregate theo Student_ID + year (tỷ lệ điểm danh chung)
+            attendance_agg = attendance_df.groupby(["Student_ID", "year"]).agg({
+                "attendance_status": "mean",
+            }).reset_index()
+            merge_on = ["Student_ID", year_column]
+            logger.info(
+                "Attendance file dùng Tên môn học, merge theo Student_ID+year (tỷ lệ điểm danh chung/năm)"
+            )
 
         attendance_agg = attendance_agg.rename(columns={
             "attendance_status": "attendance_rate",
@@ -457,15 +493,19 @@ def merge_attendance(
         })
     else:
         logger.warning("'Điểm danh' column not found in attendance data, skipping attendance rate calculation")
-        attendance_agg = attendance_df[["Student_ID", "Subject_ID", "year"]].drop_duplicates()
+        if use_subject_in_merge:
+            attendance_agg = attendance_df[["Student_ID", "Subject_ID", "year"]].drop_duplicates()
+        else:
+            attendance_agg = attendance_df[["Student_ID", "year"]].drop_duplicates()
         attendance_agg["attendance_rate"] = None
         if year_column != "year":
             attendance_agg = attendance_agg.rename(columns={"year": year_column})
+        merge_on = ["Student_ID", "Subject_ID", year_column] if use_subject_in_merge else ["Student_ID", year_column]
 
     # Merge
     merged = df.merge(
         attendance_agg,
-        on=["Student_ID", "Subject_ID", year_column],
+        on=merge_on,
         how="left",
         suffixes=("", "_attendance"),
     )

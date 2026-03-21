@@ -4,7 +4,7 @@ This module contains rule-based templates for generating educational reasons
 in Vietnamese language, focusing on learning behavior, participation, and study methods.
 """
 
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 # Reason templates for individual analysis
 INDIVIDUAL_REASON_TEMPLATES: Dict[str, Dict[str, str]] = {
@@ -128,16 +128,20 @@ def get_reason_template(
 def format_reason_with_impact(
     reason_text: str,
     impact_percentage: float,
+    data_source: Optional[str] = None,
 ) -> str:
-    """Format reason text with impact percentage.
+    """Format reason text with impact percentage and optional data source.
 
     Args:
         reason_text: Base reason text
         impact_percentage: Impact percentage (0-100)
+        data_source: Tên nguồn dữ liệu (e.g. "điểm danh", "nhân khẩu") — thêm "(dựa vào file X)"
 
     Returns:
         Formatted reason text with impact information
     """
+    if data_source:
+        reason_text = f"{reason_text} (dựa vào file {data_source})"
     impact_str = f"{impact_percentage:.1f}%"
-    return f"{reason_text} (Mức độ ảnh hưởng: {impact_str})"
+    return f"{reason_text}. (Mức độ ảnh hưởng: {impact_str})"
 

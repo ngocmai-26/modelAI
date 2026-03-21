@@ -40,7 +40,7 @@ Examples:
       --lecturer-id 90316 \\
       --exam-scores data/DiemTong.xlsx
 
-  # Full prediction with all data sources
+  # Full prediction with all data sources (including attendance)
   python scripts/predict.py \\
       --model models/model.joblib \\
       --student-id 19050006 \\
@@ -51,7 +51,8 @@ Examples:
       --demographics data/nhankhau.xlsx \\
       --teaching-methods data/PPGDfull.xlsx \\
       --assessment-methods data/PPDGfull.xlsx \\
-      --study-hours data/tuhoc.xlsx
+      --study-hours data/tuhoc.xlsx \\
+      --attendance "data/Dữ liệu điểm danh Khoa FIRA.xlsx"
 
   # Môn đã đỗ — truyền điểm thực (--actual-score)
   python scripts/predict.py \\
@@ -104,7 +105,7 @@ Examples:
         "--exam-scores",
         type=str,
         default=None,
-        help="Path to exam scores Excel file (optional if --demographics + --teaching-methods + --assessment-methods)",
+        help="Path to DiemTong (điểm tổng). Bắt buộc cho SV năm 2+; SV năm 1 có thể dùng fallback (--demographics + --teaching-methods + --assessment-methods)",
     )
     parser.add_argument(
         "--actual-score",
@@ -143,6 +144,12 @@ Examples:
         type=str,
         default=None,
         help="Path to study hours Excel file (optional)",
+    )
+    parser.add_argument(
+        "--attendance",
+        type=str,
+        default=None,
+        help="Path to attendance (điểm danh) Excel file (optional)",
     )
 
     # Output options
@@ -199,6 +206,9 @@ def validate_paths(args):
     if args.study_hours and not Path(args.study_hours).exists():
         errors.append(f"Study hours file not found: {args.study_hours}")
 
+    if args.attendance and not Path(args.attendance).exists():
+        errors.append(f"Attendance file not found: {args.attendance}")
+
     if errors:
         print("ERROR: Validation failed:", file=sys.stderr)
         for error in errors:
@@ -232,6 +242,7 @@ def main():
             teaching_methods_path=args.teaching_methods,
             assessment_methods_path=args.assessment_methods,
             study_hours_path=args.study_hours,
+            attendance_path=args.attendance,
         )
 
         # Run prediction
@@ -245,6 +256,7 @@ def main():
             teaching_methods_path=args.teaching_methods,
             assessment_methods_path=args.assessment_methods,
             study_hours_path=args.study_hours,
+            attendance_path=args.attendance,
             actual_clo_score=args.actual_score,
         )
 

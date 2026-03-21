@@ -20,6 +20,7 @@ from sklearn.preprocessing import LabelEncoder
 from ml_clo.data.encoders import encode_assessment_methods, encode_teaching_methods
 from ml_clo.data.loaders import (
     load_assessment_methods,
+    load_attendance,
     load_conduct_scores,
     load_demographics,
     load_exam_scores,
@@ -29,6 +30,7 @@ from ml_clo.data.loaders import (
 from ml_clo.data.mergers import (
     create_student_record_from_ids,
     create_training_dataset,
+    merge_attendance,
     merge_exam_and_conduct_scores,
     merge_study_hours,
 )
@@ -104,6 +106,7 @@ class AnalysisPipeline:
         teaching_methods_path: Optional[str] = None,
         assessment_methods_path: Optional[str] = None,
         study_hours_path: Optional[str] = None,
+        attendance_path: Optional[str] = None,
     ) -> pd.DataFrame:
         """Load data for all students in a class (filter DiemTong).
 
@@ -119,6 +122,7 @@ class AnalysisPipeline:
             teaching_methods_path: Path to teaching methods file (optional)
             assessment_methods_path: Path to assessment methods file (optional)
             study_hours_path: Path to study hours file (optional)
+            attendance_path: Path to attendance file (optional)
 
         Returns:
             DataFrame with class data ready for analysis
@@ -165,6 +169,9 @@ class AnalysisPipeline:
         if study_hours_path and Path(study_hours_path).exists():
             data["study_hours"] = load_study_hours(study_hours_path)
 
+        if attendance_path and Path(attendance_path).exists():
+            data["attendance"] = load_attendance(attendance_path)
+
         # Merge and build features (need full history for features)
         full_exam_df = load_exam_scores(exam_scores_path)
         full_exam_df = preprocess_exam_scores(full_exam_df, convert_to_clo=True, create_result=False)
@@ -176,6 +183,7 @@ class AnalysisPipeline:
             teaching_methods_df=data.get("teaching_methods"),
             assessment_methods_df=data.get("assessment_methods"),
             study_hours_df=data.get("study_hours"),
+            attendance_df=data.get("attendance"),
             target_column="exam_score",
             drop_missing_target=False,  # Don't drop, we need to predict
         )
@@ -326,6 +334,7 @@ class AnalysisPipeline:
         teaching_methods_path: Optional[str] = None,
         assessment_methods_path: Optional[str] = None,
         study_hours_path: Optional[str] = None,
+        attendance_path: Optional[str] = None,
         actual_scores: Optional[Dict[str, float]] = None,
         storage_path: Optional[str] = None,
     ) -> ClassAnalysisOutput:
@@ -374,6 +383,7 @@ class AnalysisPipeline:
             teaching_methods_path=teaching_methods_path,
             assessment_methods_path=assessment_methods_path,
             study_hours_path=study_hours_path,
+            attendance_path=attendance_path,
         )
 
         # Prepare features
@@ -451,6 +461,7 @@ class AnalysisPipeline:
         teaching_methods_path: Optional[str] = None,
         assessment_methods_path: Optional[str] = None,
         study_hours_path: Optional[str] = None,
+        attendance_path: Optional[str] = None,
     ) -> ClassAnalysisOutput:
         """Phân tích lớp từ danh sách điểm CLO (không cần DiemTong).
 
@@ -512,6 +523,7 @@ class AnalysisPipeline:
             teaching_methods_path=teaching_methods_path,
             assessment_methods_path=assessment_methods_path,
             study_hours_path=study_hours_path,
+            attendance_path=attendance_path,
         )
 
     def _analyze_from_distribution(
@@ -540,6 +552,7 @@ class AnalysisPipeline:
         teaching_methods_path: Optional[str] = None,
         assessment_methods_path: Optional[str] = None,
         study_hours_path: Optional[str] = None,
+        attendance_path: Optional[str] = None,
     ) -> ClassAnalysisOutput:
         """Phân tích có MSSV: build features, predict, SHAP, aggregate."""
         if self.model is None:
@@ -563,6 +576,11 @@ class AnalysisPipeline:
             if study_hours_path and Path(study_hours_path).exists()
             else None
         )
+        data["attendance"] = (
+            load_attendance(attendance_path)
+            if attendance_path and Path(attendance_path).exists()
+            else None
+        )
 
         full_exam_df = pd.DataFrame(columns=["Student_ID", "Subject_ID", "Lecturer_ID", "year", "exam_score"])
         records = []
@@ -582,6 +600,8 @@ class AnalysisPipeline:
                 base_df = merge_exam_and_conduct_scores(base_df, data["conduct_scores"], year_column="year")
             if data["study_hours"] is not None:
                 base_df = merge_study_hours(base_df, data["study_hours"], year_column="year")
+            if data["attendance"] is not None:
+                base_df = merge_attendance(base_df, data["attendance"], year_column="year")
             records.append(base_df)
 
         class_df = pd.concat(records, ignore_index=True)

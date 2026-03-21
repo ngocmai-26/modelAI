@@ -6,6 +6,7 @@ from pathlib import Path
 
 from ml_clo.data.loaders import (
     load_assessment_methods,
+    load_attendance,
     load_conduct_scores,
     load_demographics,
     load_exam_scores,
@@ -119,4 +120,30 @@ class TestLoadStudyHours:
 
         assert df is not None
         assert len(df) > 0
+
+
+class TestLoadAttendance:
+    """Test load_attendance function (Bước 1, 2: điểm danh train/predict)."""
+
+    def test_load_attendance_success(self):
+        """Test successful loading of attendance."""
+        att_files = list(Path("data").glob("Dữ liệu điểm danh*.xlsx")) if Path("data").exists() else []
+        file_path = str(att_files[0]) if att_files else "data/Dữ liệu điểm danh Khoa FIRA.xlsx"
+        if not Path(file_path).exists():
+            pytest.skip(f"Attendance file not found: {file_path}")
+
+        df = load_attendance(file_path)
+
+        assert df is not None
+        assert len(df) > 0
+        # Cần có MSSV và cột điểm danh (hoặc tương đương)
+        has_key = "MSSV" in df.columns or "Student_ID" in df.columns
+        assert has_key, f"Expected MSSV/Student_ID; columns: {list(df.columns)}"
+
+    def test_load_attendance_file_not_found(self):
+        """Test loading with non-existent file."""
+        from ml_clo.utils.exceptions import DataLoadError
+
+        with pytest.raises(DataLoadError):
+            load_attendance("nonexistent_attendance.xlsx")
 
