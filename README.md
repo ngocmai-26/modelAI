@@ -120,7 +120,7 @@ python scripts/train.py \
 # Môn chưa học — dự đoán điểm
 python scripts/predict.py \
   --model models/model.joblib \
-  --student-id 19050006 \
+  --student-id 23050010 \
   --subject-id INF0823 \
   --lecturer-id 90316 \
   --demographics data/nhankhau.xlsx \
