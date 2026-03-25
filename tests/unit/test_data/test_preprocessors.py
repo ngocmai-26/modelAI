@@ -228,3 +228,10 @@ class TestEnsureYearColumn:
         assert result["year"].notna().all()
         assert result["year"].tolist() == [2024.0, 2024.0]
 
+    def test_string_dtype_year_from_excel_fill_nan(self):
+        """Cột year kiểu pandas StringDtype (Excel) — ép số rồi điền NaN, không TypeError."""
+        df = pd.DataFrame({"year": pd.array(["2023", pd.NA], dtype="string")})
+        result = ensure_year_column(df)
+        assert result["year"].iloc[0] == 2023.0
+        assert result["year"].iloc[1] == 2024.0
+

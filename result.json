@@ -3,7 +3,7 @@
   "common_reasons": [
     {
       "reason_key": "Học lực",
-      "reason_text": "Lớp học có học lực kém, đây là thách thức lớn cần được giải quyết để cải thiện kết quả học tập. (Mức độ ảnh hưởng: 100.0%)",
+      "reason_text": "Lớp học có học lực kém, đây là thách thức lớn cần được giải quyết để cải thiện kết quả học tập. (dựa vào file điểm tổng). (Mức độ ảnh hưởng: 100.0%)",
       "average_impact_percentage": 100.0,
       "affected_students_count": 5,
       "priority_solutions": [
@@ -15,6 +15,5 @@
   ],
   "subject_id": "INF0823",
   "lecturer_id": "90316",
-  "total_students": 5,
-  "average_predicted_score": 0.04
+  "total_students": 5
 }

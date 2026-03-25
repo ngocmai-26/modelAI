@@ -387,8 +387,9 @@ def ensure_year_column(df: pd.DataFrame, year_column: str = "year") -> pd.DataFr
     if year_column not in df.columns:
         df[year_column] = np.nan
 
-    year_vals = pd.to_numeric(df[year_column], errors="coerce")
-    has_valid_year = year_vals.notna().any()
+    # Ép sang số ngay — tránh StringDtype từ Excel (gán int vào NaN sẽ lỗi TypeError)
+    df[year_column] = pd.to_numeric(df[year_column], errors="coerce")
+    has_valid_year = df[year_column].notna().any()
 
     if not has_valid_year:
         # Try alternative columns (Vietnamese or English)
