@@ -101,6 +101,22 @@ CLASS_SOLUTIONS: Dict[str, List[str]] = {
 # Maximum number of solutions per reason
 MAX_SOLUTIONS_PER_REASON = 3
 
+# Gợi ý khi chỉ số thực tế tốt nhưng SHAP vẫn nêu nhóm đó (tác động tương đối)
+INDIVIDUAL_SOLUTIONS_CALIBRATED: Dict[str, List[str]] = {
+    "Rèn luyện": [
+        "Tiếp tục duy trì điểm rèn luyện và tham gia hoạt động tích cực như hiện tại.",
+        "Theo dõi định kỳ file điểm rèn luyện để đảm bảo dữ liệu nhập cho mô hình luôn cập nhật.",
+    ],
+    "Chuyên cần": [
+        "Duy trì thói quen đi học đều như số liệu điểm danh hiện có.",
+        "Nếu có buổi vắng, chủ động bù kiến thức để tránh ảnh hưởng kỳ sau.",
+    ],
+    "Học lực": [
+        "Tiếp tục phát huy điểm mạnh ở các môn đã đạt kết quả tốt.",
+        "Ưu tiên củng cố thêm các môn có điểm thấp hơn so với trung bình cá nhân.",
+    ],
+}
+
 
 def get_solutions(
     group_name: str,
@@ -130,6 +146,19 @@ def get_solutions(
         ]
 
     return solutions[group_name][:max_solutions]
+
+
+def get_calibrated_solutions(
+    group_name: str,
+    max_solutions: int = None,
+) -> List[str]:
+    """Gợi ý nhẹ khi lý do đã hiệu chỉnh (hồ sơ tốt, SHAP tương đối)."""
+    if max_solutions is None:
+        max_solutions = MAX_SOLUTIONS_PER_REASON
+    sol = INDIVIDUAL_SOLUTIONS_CALIBRATED.get(group_name)
+    if not sol:
+        return get_solutions(group_name, "individual", max_solutions)
+    return sol[:max_solutions]
 
 
 def get_solutions_for_reasons(

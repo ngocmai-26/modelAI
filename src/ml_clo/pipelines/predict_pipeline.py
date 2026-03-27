@@ -42,6 +42,7 @@ from ml_clo.outputs.schemas import IndividualAnalysisOutput
 from ml_clo.reasoning.reason_generator import generate_complete_explanation
 from ml_clo.utils.exceptions import ModelLoadError
 from ml_clo.utils.logger import get_logger
+from ml_clo.utils.hash_utils import stable_hash_int
 from ml_clo.xai.shap_explainer import EnsembleSHAPExplainer
 from ml_clo.xai.shap_postprocess import process_shap_for_analysis
 
@@ -224,31 +225,44 @@ class PredictionPipeline:
             _sid = int(student_id) if isinstance(student_id, str) and student_id.isdigit() else student_id
             _subj = str(subject_id).strip()
             _lec = str(lecturer_id).strip()
+            _lec_s = str(_lec).strip()
+            _subj_s = str(_subj).strip()
+            lec_series = exam_df["Lecturer_ID"].astype(str).str.strip()
+            subj_series = exam_df["Subject_ID"].astype(str).str.strip()
             student_data = exam_df[
                 (exam_df["Student_ID"] == _sid)
-                & (exam_df["Subject_ID"] == _subj)
-                & (exam_df["Lecturer_ID"] == _lec)
+                & (subj_series == _subj_s)
+                & (lec_series == _lec_s)
             ].copy()
 
             # SV năm 2+: có trong DiemTong → bắt buộc dùng exam data, không fallback
             # SV năm 1: không có trong DiemTong → cho phép fallback
             if len(student_data) == 0 and student_has_history(exam_df, student_id):
-                # SV có lịch sử nhưng chưa học môn này — tạo 1 dòng (sid, subj, lec), dùng exam_df làm history
+                # SV có lịch sử nhưng chưa học môn này — cần đủ cột như dòng train (DiemTong),
+                # không chỉ 5 cột; thiếu cột → prepare_features đệm 0, lệch hoàn toàn so với hash lúc train.
                 exam_for_student = exam_df[exam_df["Student_ID"] == _sid]
-                year_val = (
-                    exam_for_student["year"].iloc[0]
-                    if "year" in exam_for_student.columns and exam_for_student["year"].notna().any()
-                    else 2024
-                )
-                student_data = pd.DataFrame([{
-                    "Student_ID": _sid,
-                    "Subject_ID": _subj,
-                    "Lecturer_ID": _lec,
-                    "exam_score": np.nan,
-                    "year": year_val,
-                }])
+                if "year" in exam_for_student.columns and exam_for_student["year"].notna().any():
+                    year_val = exam_for_student["year"].dropna().iloc[-1]
+                else:
+                    year_val = 2024
+                course_rows = exam_df[(subj_series == _subj_s) & (lec_series == _lec_s)]
+                if len(course_rows) > 0:
+                    template = course_rows.iloc[0].copy()
+                else:
+                    es = exam_for_student
+                    if "year" in es.columns:
+                        template = es.sort_values("year", kind="mergesort").iloc[-1].copy()
+                    else:
+                        template = es.iloc[-1].copy()
+                    template["Subject_ID"] = _subj_s
+                    template["Lecturer_ID"] = _lec_s
+                template["Student_ID"] = _sid
+                template["exam_score"] = np.nan
+                template["year"] = year_val
+                student_data = pd.DataFrame([template])
                 logger.info(
-                    f"SV năm 2+ (có lịch sử) nhưng chưa học môn {_subj}: dùng Điểm tổng, không fallback"
+                    f"SV năm 2+ (có lịch sử) nhưng chưa học môn {_subj}: "
+                    f"dùng mẫu cột từ Điểm tổng (môn+GV), exam_score=NaN, lịch sử từ toàn bộ exam_df"
                 )
         else:
             def _has_valid(v):
@@ -339,6 +353,7 @@ class PredictionPipeline:
             "year",
         ]
         feature_cols = [col for col in student_df.columns if col not in exclude_cols]
+        feature_cols = [c for c in feature_cols if c != "min_exam_score"]
 
         # Remove columns with all NaN
         feature_cols = [col for col in feature_cols if student_df[col].notna().sum() > 0]
@@ -355,27 +370,12 @@ class PredictionPipeline:
 
         X = student_df[feature_cols].copy()
 
-        # Encode categorical columns (use training encoders if available)
-        if label_encoders is None:
-            label_encoders = {}
-
+        # Encode categorical columns deterministically.
+        # NOTE: We intentionally do NOT fit LabelEncoder here because doing so
+        # on a single-record input during prediction breaks train/predict consistency.
         for col in X.columns:
             if X[col].dtype == "object" or X[col].dtype.name == "category":
-                if col in label_encoders:
-                    le = label_encoders[col]
-                    X[col] = X[col].fillna("__UNKNOWN__")
-                    vals = X[col].astype(str)
-                    mask = vals.isin(le.classes_)
-                    encoded = np.full(len(vals), -1, dtype=np.int64)
-                    if mask.any():
-                        encoded[mask] = le.transform(vals[mask])
-                    X[col] = encoded
-                else:
-                    # Create new encoder if not found
-                    le = LabelEncoder()
-                    X[col] = X[col].fillna("Unknown")
-                    X[col] = le.fit_transform(X[col].astype(str))
-                    label_encoders[col] = le
+                X[col] = X[col].map(lambda v: stable_hash_int(v))
             elif X[col].dtype in [np.int64, np.float64]:
                 X[col] = X[col].fillna(X[col].median() if X[col].notna().any() else 0)
             else:
@@ -383,13 +383,7 @@ class PredictionPipeline:
                     X[col] = pd.to_numeric(X[col], errors="coerce")
                     X[col] = X[col].fillna(X[col].median() if X[col].notna().any() else 0)
                 except Exception:
-                    if col in label_encoders:
-                        le = label_encoders[col]
-                    else:
-                        le = LabelEncoder()
-                        label_encoders[col] = le
-                    X[col] = X[col].fillna("Unknown")
-                    X[col] = le.transform(X[col].astype(str))
+                    X[col] = X[col].map(lambda v: stable_hash_int(v))
 
         # Final check: fill any remaining NaN
         X = X.apply(pd.to_numeric, errors="coerce")
@@ -499,6 +493,7 @@ class PredictionPipeline:
             predicted_score=display_score,
             context="individual",
             include_solutions=True,
+            raw_feature_row=student_df.iloc[0],
         )
 
         # Convert to output schema (predicted = model, actual = điểm thực nếu có)

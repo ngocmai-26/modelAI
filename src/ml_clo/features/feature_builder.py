@@ -139,7 +139,12 @@ def build_academic_history_features(
     - passed_subjects: Number of subjects passed (score >= 3.0 in 6-point scale)
     - pass_rate: Ratio of passed to total subjects
     - avg_exam_score: Average exam score across all subjects
+    - median_exam_score: Median exam score (robust to one very low/high course)
+    - min_exam_score: Minimum course score (thô, dùng tham chiếu / hiển thị; không đưa vào vector train)
     - recent_avg_score: Average exam score in recent N semesters
+    - recent_median_score: Median of the same recent window as recent_avg_score
+    - academic_core_score: Trung bình median / recent_avg / recent_median (ít nhạy một môn lệch)
+    - min_exam_score_adj: Điểm min điều chỉnh nền (≥4 môn: max(raw_min, median(nền)−1)) — dùng cho mô hình
     - improvement_trend: Trend indicator (1=improving, 0=stable, -1=declining)
 
     Args:
@@ -208,22 +213,32 @@ def build_academic_history_features(
                 "passed_subjects": 0,
                 "pass_rate": 0.0,
                 "avg_exam_score": np.nan,
+                "median_exam_score": np.nan,
+                "min_exam_score": np.nan,
                 "recent_avg_score": np.nan,
+                "recent_median_score": np.nan,
+                "academic_core_score": np.nan,
+                "min_exam_score_adj": np.nan,
                 "improvement_trend": 0,
             })
             continue
 
-        # Sort by year (and semester if available)
+        # Sort by time, then stable course keys (avoids arbitrary order within one year)
         sort_cols = [year_column]
         if "semester" in student_exams.columns:
             sort_cols.append("semester")
-        student_exams = student_exams.sort_values(sort_cols)
+        for tie_col in ("Subject_ID", "Lecturer_ID"):
+            if tie_col in student_exams.columns:
+                sort_cols.append(tie_col)
+        student_exams = student_exams.sort_values(sort_cols, kind="mergesort")
 
         # Basic statistics
         total_subjects = len(student_exams)
         passed_subjects = (student_exams["exam_score"] >= 3.0).sum()  # Pass threshold: 3.0 (equivalent to 5.0 in 10-point)
         pass_rate = passed_subjects / total_subjects if total_subjects > 0 else 0.0
         avg_exam_score = student_exams["exam_score"].mean()
+        median_exam_score = student_exams["exam_score"].median()
+        min_exam_score = student_exams["exam_score"].min()
 
         # Recent average (last N semesters or years)
         if "semester" in student_exams.columns:
@@ -233,10 +248,26 @@ def build_academic_history_features(
             # Use year-based (assume 2 semesters per year)
             recent_exams = student_exams.tail(recent_semesters * 2)
         recent_avg_score = recent_exams["exam_score"].mean() if len(recent_exams) > 0 else np.nan
+        recent_median_score = recent_exams["exam_score"].median() if len(recent_exams) > 0 else np.nan
+
+        core_parts = [
+            x for x in (median_exam_score, recent_avg_score, recent_median_score) if pd.notna(x)
+        ]
+        academic_core_score = float(np.mean(core_parts)) if core_parts else np.nan
+
+        # Một môn điểm cực thấp không nên “neo” toàn bộ dự đoán môn mới khi nền trung vị/gần đây cao hơn
+        floor_refs = [x for x in (median_exam_score, recent_median_score, recent_avg_score) if pd.notna(x)]
+        if total_subjects >= 4 and floor_refs and pd.notna(min_exam_score):
+            floor_ref = float(np.median(floor_refs))
+            min_exam_score_adj = float(max(float(min_exam_score), floor_ref - 1.0))
+        else:
+            min_exam_score_adj = float(min_exam_score) if pd.notna(min_exam_score) else np.nan
+
+        recent_n = recent_semesters if "semester" in student_exams.columns else recent_semesters * 2
 
         # Improvement trend: compare recent vs older performance
         if len(student_exams) >= 4:  # Need at least 4 records
-            older_exams = student_exams.head(len(student_exams) - recent_semesters)
+            older_exams = student_exams.head(max(0, len(student_exams) - recent_n))
             older_avg = older_exams["exam_score"].mean()
             if pd.notna(recent_avg_score) and pd.notna(older_avg):
                 if recent_avg_score > older_avg + 0.1:  # Threshold for improvement
@@ -256,7 +287,12 @@ def build_academic_history_features(
             "passed_subjects": passed_subjects,
             "pass_rate": pass_rate,
             "avg_exam_score": avg_exam_score,
+            "median_exam_score": median_exam_score,
+            "min_exam_score": float(min_exam_score) if pd.notna(min_exam_score) else np.nan,
             "recent_avg_score": recent_avg_score,
+            "recent_median_score": recent_median_score,
+            "academic_core_score": academic_core_score,
+            "min_exam_score_adj": min_exam_score_adj,
             "improvement_trend": improvement_trend,
         })
 
@@ -274,6 +310,7 @@ def build_academic_history_features(
         f"Built academic history features: "
         f"total_subjects ({df['total_subjects'].notna().sum()} non-null), "
         f"avg_exam_score ({df['avg_exam_score'].notna().sum()} non-null), "
+        f"median_exam_score ({df['median_exam_score'].notna().sum()} non-null), "
         f"recent_avg_score ({df['recent_avg_score'].notna().sum()} non-null)"
     )
 

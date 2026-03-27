@@ -128,6 +128,11 @@ Examples:
         default=0.2,
         help="Proportion of training data for validation (default: 0.2)",
     )
+    parser.add_argument(
+        "--no-group-split",
+        action="store_true",
+        help="Chia train/val/test ngẫu nhiên theo dòng thay vì gom theo Student_ID",
+    )
 
     # Output options
     parser.add_argument(
@@ -209,6 +214,7 @@ def main():
     print(f"Random state: {args.random_state}")
     print(f"Test size: {args.test_size}")
     print(f"Validation size: {args.validation_size}")
+    print(f"Group split by student: {not args.no_group_split}")
     print("=" * 80)
 
     try:
@@ -216,6 +222,7 @@ def main():
             random_state=args.random_state,
             test_size=args.test_size,
             validation_size=args.validation_size,
+            group_split_by_student=not args.no_group_split,
         )
 
         # Run training pipeline

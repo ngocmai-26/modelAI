@@ -387,8 +387,20 @@ def ensure_year_column(df: pd.DataFrame, year_column: str = "year") -> pd.DataFr
     if year_column not in df.columns:
         df[year_column] = np.nan
 
-    # Ép sang số ngay — tránh StringDtype từ Excel (gán int vào NaN sẽ lỗi TypeError)
-    df[year_column] = pd.to_numeric(df[year_column], errors="coerce")
+    # 1) Try parse year directly.
+    #    DiemTong.xlsx thường để year dạng "2019-2020" nên pd.to_numeric sẽ coerce -> NaN.
+    year_raw = df[year_column]
+    year_numeric = pd.to_numeric(year_raw, errors="coerce")
+
+    # 2) If still no valid years, try extract the first 4 digits from patterns like:
+    #    - "2019-2020" -> 2019
+    #    - "2019/2020" -> 2019 (fallback handled by regex)
+    if not year_numeric.notna().any():
+        year_str = year_raw.astype(str)
+        extracted = year_str.str.extract(r"(\d{4})")[0]  # first occurrence of 4 digits
+        year_numeric = pd.to_numeric(extracted, errors="coerce")
+
+    df[year_column] = year_numeric
     has_valid_year = df[year_column].notna().any()
 
     if not has_valid_year:
@@ -431,6 +443,60 @@ def ensure_year_column(df: pd.DataFrame, year_column: str = "year") -> pd.DataFr
             )
     df[year_column] = pd.to_numeric(df[year_column], errors="coerce")
     return df
+
+
+def deduplicate_exam_scores(
+    df: pd.DataFrame,
+    student_id_column: str = "Student_ID",
+    subject_id_column: str = "Subject_ID",
+    lecturer_id_column: str = "Lecturer_ID",
+    year_column: str = "year",
+    score_column: str = "exam_score",
+) -> pd.DataFrame:
+    """Merge duplicate rows for the same course enrollment.
+
+    Exports often repeat (sinh viên, môn, giảng viên, năm); duplicating rows
+    inflates ``total_subjects`` and distorts ``recent_avg_score``. Scores for
+    the same key are averaged.
+
+    Args:
+        df: Preprocessed exam scores
+        student_id_column: Student ID column name
+        subject_id_column: Subject ID column name
+        lecturer_id_column: Lecturer ID column name
+        year_column: Academic year column name
+        score_column: Numeric score column to average
+
+    Returns:
+        DataFrame with at most one row per group key
+    """
+    df = df.copy()
+    subset = [student_id_column, subject_id_column, lecturer_id_column, year_column]
+    if "semester" in df.columns and df["semester"].notna().any():
+        subset.append("semester")
+
+    before = len(df)
+    if before == 0:
+        return df
+
+    dup_mask = df.duplicated(subset=subset, keep=False)
+    if not dup_mask.any():
+        return df
+
+    agg: dict = {score_column: "mean"}
+    if "Result" in df.columns:
+        agg["Result"] = "max"
+    for col in df.columns:
+        if col in subset or col in agg:
+            continue
+        agg[col] = "first"
+
+    out = df.groupby(subset, as_index=False, dropna=False).agg(agg)
+    logger.info(
+        f"Deduplicated exam rows: {before} -> {len(out)} "
+        f"({before - len(out)} rows merged; {score_column}=mean per course key)"
+    )
+    return out
 
 
 def preprocess_exam_scores(
@@ -479,6 +545,9 @@ def preprocess_exam_scores(
 
     # Step 6: Ensure year column (required for merging with conduct, attendance, study_hours)
     df = ensure_year_column(df, year_column="year")
+
+    # Step 7: One row per (student, subject, lecturer, year[, semester]) for stable history
+    df = deduplicate_exam_scores(df, year_column="year")
 
     logger.info(f"Preprocessing complete: {len(df)} records ready for feature engineering")
     return df

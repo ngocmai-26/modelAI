@@ -13,8 +13,7 @@ from typing import Dict, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
+from sklearn.model_selection import GroupShuffleSplit, train_test_split
 
 from ml_clo.config.model_config import TRAINING_CONFIG
 from ml_clo.data.encoders import encode_assessment_methods, encode_teaching_methods
@@ -36,6 +35,7 @@ from ml_clo.models.model_evaluator import (
     evaluate_model,
     print_evaluation_summary,
 )
+from ml_clo.utils.hash_utils import stable_hash_int
 from ml_clo.utils.exceptions import DataLoadError, DataValidationError
 from ml_clo.utils.logger import get_logger
 
@@ -50,6 +50,7 @@ class TrainingPipeline:
         random_state: int = 42,
         test_size: float = 0.2,
         validation_size: float = 0.2,
+        group_split_by_student: bool = True,
     ):
         """Initialize training pipeline.
 
@@ -57,11 +58,14 @@ class TrainingPipeline:
             random_state: Random seed for reproducibility (default: 42)
             test_size: Proportion of data for testing (default: 0.2)
             validation_size: Proportion of training data for validation (default: 0.2)
+            group_split_by_student: Mặc định True — GroupShuffleSplit theo Student_ID
+                (một MSSV không vừa train vừa test). Đặt False hoặc dùng --no-group-split
+                trên CLI để chia ngẫu nhiên theo dòng.
         """
         self.random_state = random_state
         self.test_size = test_size
         self.validation_size = validation_size
-        self.label_encoders: Dict[str, LabelEncoder] = {}
+        self.group_split_by_student = group_split_by_student
         self.feature_names: Optional[list] = None
 
     def load_data(
@@ -206,6 +210,9 @@ class TrainingPipeline:
         ]
         feature_cols = [col for col in training_df.columns if col not in exclude_cols]
 
+        # Điểm min thô dễ kéo cây theo một môn lệch; mô hình dùng min_exam_score_adj (+ academic_core).
+        feature_cols = [c for c in feature_cols if c != "min_exam_score"]
+
         # Remove columns with all NaN
         feature_cols = [col for col in feature_cols if training_df[col].notna().sum() > 0]
 
@@ -214,13 +221,10 @@ class TrainingPipeline:
         y = training_df["exam_score"].copy()
 
         # Encode categorical columns
-        self.label_encoders = {}
         for col in X.columns:
             if X[col].dtype == "object" or X[col].dtype.name == "category":
-                le = LabelEncoder()
-                X[col] = X[col].fillna("Unknown")
-                X[col] = le.fit_transform(X[col].astype(str))
-                self.label_encoders[col] = le
+                # Deterministic encoding so train/predict stay consistent.
+                X[col] = X[col].map(lambda v: stable_hash_int(v))
             elif X[col].dtype in [np.int64, np.float64]:
                 X[col] = X[col].fillna(X[col].median())
             else:
@@ -228,10 +232,8 @@ class TrainingPipeline:
                     X[col] = pd.to_numeric(X[col], errors="coerce")
                     X[col] = X[col].fillna(X[col].median())
                 except Exception:
-                    le = LabelEncoder()
-                    X[col] = X[col].fillna("Unknown")
-                    X[col] = le.fit_transform(X[col].astype(str))
-                    self.label_encoders[col] = le
+                    # Fallback: treat as categorical and hash it.
+                    X[col] = X[col].map(lambda v: stable_hash_int(v))
 
         # Final check: fill any remaining NaN
         X = X.apply(pd.to_numeric, errors="coerce")
@@ -255,35 +257,63 @@ class TrainingPipeline:
         self,
         X: pd.DataFrame,
         y: pd.Series,
+        groups: Optional[pd.Series] = None,
     ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.Series, pd.Series, pd.Series]:
         """Split data into train, validation, and test sets.
 
         Args:
             X: Feature matrix
             y: Target vector
+            groups: Optional group id per row (e.g. Student_ID) for GroupShuffleSplit
 
         Returns:
             Tuple of (X_train, X_val, X_test, y_train, y_val, y_test)
         """
-        logger.info("Splitting data into train/validation/test sets")
+        if groups is not None and self.group_split_by_student:
+            logger.info(
+                "Splitting data into train/validation/test sets (grouped by student)"
+            )
+            gss = GroupShuffleSplit(
+                n_splits=1,
+                test_size=self.test_size,
+                random_state=self.random_state,
+            )
+            train_idx, test_idx = next(gss.split(X, y, groups=groups))
+            X_train = X.iloc[train_idx]
+            X_test = X.iloc[test_idx]
+            y_train = y.iloc[train_idx]
+            y_test = y.iloc[test_idx]
+            groups_train = groups.iloc[train_idx]
 
-        # Split into train and test
-        X_train, X_test, y_train, y_test = train_test_split(
-            X,
-            y,
-            test_size=self.test_size,
-            random_state=self.random_state,
-            shuffle=True,
-        )
+            gss_val = GroupShuffleSplit(
+                n_splits=1,
+                test_size=self.validation_size,
+                random_state=self.random_state,
+            )
+            sub_tr, sub_val = next(gss_val.split(X_train, y_train, groups=groups_train))
+            X_train_fit = X_train.iloc[sub_tr]
+            X_val = X_train.iloc[sub_val]
+            y_train_fit = y_train.iloc[sub_tr]
+            y_val = y_train.iloc[sub_val]
+        else:
+            logger.info("Splitting data into train/validation/test sets (random rows)")
+            # Split into train and test
+            X_train, X_test, y_train, y_test = train_test_split(
+                X,
+                y,
+                test_size=self.test_size,
+                random_state=self.random_state,
+                shuffle=True,
+            )
 
-        # Further split training data for validation
-        X_train_fit, X_val, y_train_fit, y_val = train_test_split(
-            X_train,
-            y_train,
-            test_size=self.validation_size,
-            random_state=self.random_state,
-            shuffle=True,
-        )
+            # Further split training data for validation
+            X_train_fit, X_val, y_train_fit, y_val = train_test_split(
+                X_train,
+                y_train,
+                test_size=self.validation_size,
+                random_state=self.random_state,
+                shuffle=True,
+            )
 
         # Ensure no NaN
         for df_name, df in [
@@ -441,8 +471,12 @@ class TrainingPipeline:
         # Step 3: Prepare features
         X, y, feature_names = self.prepare_features(training_df)
 
-        # Step 4: Split data
-        X_train, X_val, X_test, y_train, y_val, y_test = self.split_data(X, y)
+        # Step 4: Split data (by student when enabled — no student in both train and test)
+        groups = None
+        if self.group_split_by_student and "Student_ID" in training_df.columns:
+            groups = training_df.loc[X.index, "Student_ID"]
+
+        X_train, X_val, X_test, y_train, y_val, y_test = self.split_data(X, y, groups=groups)
 
         # Step 5: Train model
         model = self.train(X_train, y_train, X_val, y_val)

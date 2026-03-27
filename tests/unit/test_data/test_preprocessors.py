@@ -187,6 +187,20 @@ class TestPreprocessExamScores:
         assert "year" in result.columns
         assert result["year"].notna().all()
 
+    def test_preprocess_deduplicates_same_course_key(self):
+        """Duplicate (SV, môn, GV, năm) được gộp; điểm lấy trung bình."""
+        df = pd.DataFrame({
+            "Student_ID": [1, 1],
+            "Subject_ID": ["INF0001", "INF0001"],
+            "Lecturer_ID": ["L01", "L01"],
+            "exam_score": [10.0, 5.0],
+            "year": [2024, 2024],
+        })
+        result = preprocess_exam_scores(df, convert_to_clo=True, create_result=False)
+        assert len(result) == 1
+        # TB 10-thang 7.5 -> CLO 4.5
+        assert abs(float(result["exam_score"].iloc[0]) - 4.5) < 1e-6
+
 
 class TestEnsureYearColumn:
     """Test ensure_year_column function."""
