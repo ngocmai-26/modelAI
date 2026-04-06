@@ -6,8 +6,13 @@ Uses rule-based templates (no ML, no LLMs) to map XAI outputs to pedagogical rea
 
 from typing import Dict, List, Optional, Tuple
 
-from ml_clo.config.xai_config import DATA_SOURCE_MAPPING, REASON_CONFIG
-from ml_clo.reasoning.solution_mapper import get_solutions_for_reasons
+import pandas as pd
+
+from ml_clo.config.xai_config import DATA_SOURCE_MAPPING, REASON_VALUE_CALIBRATION
+from ml_clo.reasoning.solution_mapper import (
+    get_calibrated_solutions,
+    get_solutions_for_reasons,
+)
 from ml_clo.reasoning.templates import format_reason_with_impact, get_reason_template
 from ml_clo.utils.logger import get_logger
 
@@ -18,6 +23,7 @@ def generate_reasons(
     top_negative_impacts: List[Tuple[str, float, float]],
     context: str = "individual",
     include_solutions: bool = True,
+    raw_feature_row: Optional[pd.Series] = None,
 ) -> List[Dict[str, any]]:
     """Generate educational reasons from top negative impacts.
 
@@ -25,6 +31,7 @@ def generate_reasons(
         top_negative_impacts: List of tuples (group_name, shap_value, impact_percentage)
         context: "individual" or "class" (default: "individual")
         include_solutions: Whether to include solutions (default: True)
+        raw_feature_row: Một dòng dữ liệu gốc (trước hash) để khớp lời giải với chỉ số thực tế
 
     Returns:
         List of reason dictionaries with:
@@ -33,12 +40,17 @@ def generate_reasons(
         - impact_percentage: Impact percentage
         - shap_value: Raw SHAP value
         - solutions: List of actionable solutions (if include_solutions=True)
+        - calibrated: True nếu đã hiệu chỉnh theo hồ sơ tốt (optional)
     """
     reasons = []
 
     for group_name, shap_value, impact_percentage in top_negative_impacts:
-        # Get reason template
-        reason_text = get_reason_template(group_name, impact_percentage, context)
+        reason_text, calibrated = get_reason_template(
+            group_name,
+            impact_percentage,
+            context,
+            raw_feature_row=raw_feature_row,
+        )
 
         # Get data source for this group (e.g. "điểm danh", "nhân khẩu")
         data_source = DATA_SOURCE_MAPPING.get(group_name)
@@ -48,20 +60,24 @@ def generate_reasons(
             reason_text, impact_percentage, data_source=data_source
         )
 
-        reason_dict = {
+        reason_dict: Dict[str, any] = {
             "group_name": group_name,
             "reason_text": formatted_reason,
             "impact_percentage": round(impact_percentage, 2),
             "shap_value": round(float(shap_value), 4),
+            "calibrated": calibrated,
         }
 
         # Add solutions if requested
         if include_solutions:
-            solutions = get_solutions_for_reasons(
-                [(group_name, shap_value, impact_percentage)],
-                context=context,
-            )
-            reason_dict["solutions"] = solutions.get(group_name, [])
+            if context == "individual" and calibrated:
+                reason_dict["solutions"] = get_calibrated_solutions(group_name)
+            else:
+                solutions = get_solutions_for_reasons(
+                    [(group_name, shap_value, impact_percentage)],
+                    context=context,
+                )
+                reason_dict["solutions"] = solutions.get(group_name, [])
 
         reasons.append(reason_dict)
 
@@ -75,12 +91,14 @@ def generate_reasons(
 def generate_summary_reason(
     reasons: List[Dict[str, any]],
     context: str = "individual",
+    predicted_score: Optional[float] = None,
 ) -> str:
     """Generate a summary reason text from multiple reasons.
 
     Args:
         reasons: List of reason dictionaries
         context: "individual" or "class" (default: "individual")
+        predicted_score: Điểm dự đoán (để tránh mâu thuẫn khi điểm cao nhưng SHAP nêu nhóm âm)
 
     Returns:
         Summary reason text
@@ -95,14 +113,26 @@ def generate_summary_reason(
     top_reason = reasons[0]
     top_group = top_reason["group_name"]
     top_impact = top_reason["impact_percentage"]
+    high_clo = float(REASON_VALUE_CALIBRATION["high_predicted_clo_min"])
 
-    # Build summary
-    if context == "individual":
+    if (
+        context == "individual"
+        and predicted_score is not None
+        and predicted_score >= high_clo
+        and top_reason.get("calibrated")
+    ):
+        summary = (
+            f"Điểm dự đoán {predicted_score:.2f}/6 ở mức khá tốt. "
+            f"Nhóm yếu tố SHAP xếp đầu là {top_group.lower()} ({top_impact:.1f}% trong phân bổ giải thích), "
+            "trong khi chỉ số thực tế trên hồ sơ cho nhóm đó vẫn tốt — đây là tác động tương đối so với baseline mô hình, "
+            "không có nghĩa biểu hiện thực tế kém."
+        )
+    elif context == "individual":
         summary = f"Nguyên nhân chính ảnh hưởng đến kết quả học tập là {top_group.lower()} "
+        summary += f"(mức độ ảnh hưởng: {top_impact:.1f}%)."
     else:
         summary = f"Nguyên nhân chính ảnh hưởng đến kết quả học tập của lớp là {top_group.lower()} "
-
-    summary += f"(mức độ ảnh hưởng: {top_impact:.1f}%)."
+        summary += f"(mức độ ảnh hưởng: {top_impact:.1f}%)."
 
     # Add secondary reasons if any
     if len(reasons) > 1:
@@ -217,6 +247,7 @@ def generate_complete_explanation(
     predicted_score: float,
     context: str = "individual",
     include_solutions: bool = True,
+    raw_feature_row: Optional[pd.Series] = None,
 ) -> Dict[str, any]:
     """Generate complete explanation with reasons and solutions.
 
@@ -225,6 +256,7 @@ def generate_complete_explanation(
         predicted_score: Predicted CLO score
         context: "individual" or "class" (default: "individual")
         include_solutions: Whether to include solutions (default: True)
+        raw_feature_row: Dòng feature gốc (trước encode) để khớp lý do với dữ liệu thực tế
 
     Returns:
         Dictionary containing:
@@ -238,10 +270,15 @@ def generate_complete_explanation(
         top_negative_impacts,
         context=context,
         include_solutions=include_solutions,
+        raw_feature_row=raw_feature_row,
     )
 
     # Generate summary
-    summary = generate_summary_reason(reasons, context=context)
+    summary = generate_summary_reason(
+        reasons,
+        context=context,
+        predicted_score=predicted_score,
+    )
 
     explanation = {
         "predicted_score": round(predicted_score, 2),

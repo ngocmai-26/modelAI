@@ -5,20 +5,23 @@ This module defines hyperparameters and configuration for all models.
 
 from typing import Dict, Any
 
-# Random Forest Regressor hyperparameters
+# Random Forest (pipeline chuẩn: độ chính xác + SHAP)
 RANDOM_FOREST_CONFIG: Dict[str, Any] = {
     "n_estimators": 1000,
-    "max_depth": 25,
+    "max_depth": 22,
+    "min_samples_leaf": 4,
     "random_state": 42,
-    "n_jobs": -1,  # Use all available cores
+    "n_jobs": -1,
     "verbose": 0,
 }
 
-# Gradient Boosting Regressor hyperparameters
+# Gradient Boosting — subsample + min_samples_leaf giúp tổng quát hóa
 GRADIENT_BOOSTING_CONFIG: Dict[str, Any] = {
-    "n_estimators": 500,
-    "max_depth": 12,
-    "learning_rate": 0.03,
+    "n_estimators": 600,
+    "max_depth": 10,
+    "learning_rate": 0.025,
+    "subsample": 0.9,
+    "min_samples_leaf": 5,
     "random_state": 42,
     "verbose": 0,
 }
@@ -28,6 +31,10 @@ ENSEMBLE_CONFIG: Dict[str, Any] = {
     "weights_method": "validation_performance",  # or "equal"
     "min_weight": 0.1,  # Minimum weight for any model
     "max_weight": 0.9,  # Maximum weight for any model
+    # GB đôi khi ngoại suy rất thấp trên vector lạ; RF ổn định hơn → kéo GB về phía RF khi lệch rõ
+    "gb_low_anomaly_max_gb": 0.75,
+    "gb_low_anomaly_min_gap": 0.35,
+    "gb_low_anomaly_rf_blend": 0.88,  # gb_use = blend * rf + (1-blend) * gb
 }
 
 # Training configuration

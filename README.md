@@ -110,6 +110,9 @@ python scripts/train.py \
   --study-hours data/tuhoc.xlsx \
   --attendance "data/Dữ liệu điểm danh Khoa FIRA.xlsx" \
   --output models/model.joblib
+
+# Mặc định: chia tập theo Student_ID (GroupShuffleSplit). Muốn chia ngẫu nhiên theo dòng:
+#   thêm --no-group-split
 ```
 
 ### 2. Dự đoán cá nhân (có XAI)
@@ -120,7 +123,7 @@ python scripts/train.py \
 # Môn chưa học — dự đoán điểm
 python scripts/predict.py \
   --model models/model.joblib \
-  --student-id 23050010 \
+  --student-id 20050013 \
   --subject-id INF0823 \
   --lecturer-id 90316 \
   --demographics data/nhankhau.xlsx \
@@ -138,18 +141,21 @@ python scripts/predict.py \
   --assessment-methods data/PPDGfull.xlsx \
   --actual-score 4.2
 
-# Có DiemTong — dùng exam-scores + điểm danh (tùy chọn)
+# Có DiemTong — nên kèm điểm rèn luyện + điểm danh để đủ feature (khớp lúc train)
 python scripts/predict.py \
   --model models/model.joblib \
-  --student-id 19050006 \
+  --student-id 24050126 \
   --subject-id INF0823 \
   --lecturer-id 90316 \
   --exam-scores data/DiemTong.xlsx \
+  --conduct-scores data/diemrenluyen.xlsx \
   --demographics data/nhankhau.xlsx \
   --teaching-methods data/PPGDfull.xlsx \
   --assessment-methods data/PPDGfull.xlsx \
   --attendance "data/Dữ liệu điểm danh Khoa FIRA.xlsx"
 ```
+
+Điểm dự đoán bám theo **Điểm tổng** trong file: nếu có vài môn rất thấp nhưng trung vị/gần đây khá, mô hình dùng `academic_core_score` và `min_exam_score_adj` (điểm min thô `min_exam_score` không đưa vào cây). Cần **train lại** `model.joblib` sau khi cập nhật code.
 
 Output JSON: `predicted_clo`, `actual_clo_score` (nếu có), lý do, giải pháp.
 

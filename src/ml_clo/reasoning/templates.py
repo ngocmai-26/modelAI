@@ -4,7 +4,11 @@ This module contains rule-based templates for generating educational reasons
 in Vietnamese language, focusing on learning behavior, participation, and study methods.
 """
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+import pandas as pd
+
+from ml_clo.config.xai_config import REASON_VALUE_CALIBRATION
 
 # Reason templates for individual analysis
 INDIVIDUAL_REASON_TEMPLATES: Dict[str, Dict[str, str]] = {
@@ -17,16 +21,29 @@ INDIVIDUAL_REASON_TEMPLATES: Dict[str, Dict[str, str]] = {
         "low": "Tỷ lệ chuyên cần của sinh viên thấp, việc tham gia các buổi học không đều đặn ảnh hưởng đến quá trình tiếp thu kiến thức.",
         "medium": "Sinh viên chưa duy trì được mức độ chuyên cần ổn định, làm gián đoạn quá trình học tập liên tục.",
         "high": "Sinh viên có tỷ lệ vắng mặt cao, thiếu sự tham gia tích cực trong các hoạt động học tập trên lớp.",
+        "calibrated_good": (
+            "Tỷ lệ điểm danh trên dữ liệu nhập vào ở mức tốt; nhóm chuyên cần vẫn xuất hiện trong giải thích "
+            "vì mô hình gán tác động tương đối làm giảm điểm so với baseline, không đồng nghĩa vắng nhiều buổi học"
+        ),
     },
     "Rèn luyện": {
         "low": "Điểm rèn luyện của sinh viên ở mức thấp, phản ánh sự thiếu tích cực trong các hoạt động ngoại khóa và tuân thủ nội quy.",
         "medium": "Mức độ rèn luyện của sinh viên chưa đạt yêu cầu, cần cải thiện thái độ và hành vi học tập.",
         "high": "Sinh viên có điểm rèn luyện kém, ảnh hưởng tiêu cực đến môi trường học tập và kết quả học tập.",
+        # Chỉ dùng khi hồ sơ rèn luyện tốt nhưng SHAP nhóm này vẫn âm (kéo điểm so với baseline mô hình)
+        "calibrated_good": (
+            "Điểm rèn luyện trên hồ sơ ở mức tốt; nhóm yếu tố này vẫn được xếp cao trong giải thích mô hình "
+            "vì nó hơi kéo điểm dự đoán xuống so với mức cơ sở (baseline) của mô hình, không có nghĩa rèn luyện kém"
+        ),
     },
     "Học lực": {
         "low": "Học lực hiện tại của sinh viên còn yếu, điểm số các môn học trước đó thấp, chưa đủ nền tảng để tiếp thu kiến thức mới.",
         "medium": "Nền tảng học tập của sinh viên chưa vững chắc, cần củng cố lại kiến thức cơ bản để cải thiện kết quả.",
         "high": "Sinh viên có học lực kém, thiếu nền tảng kiến thức cần thiết để đạt được kết quả tốt trong môn học này.",
+        "calibrated_good": (
+            "Điểm trung bình các môn trước trên hồ sơ ở mức khá; nhóm học lực vẫn được mô hình nhấn mạnh "
+            "do tác động SHAP tương đối so với baseline, không mô tả toàn bộ quá trình học là yếu"
+        ),
     },
     "Giảng dạy": {
         "low": "Phương pháp giảng dạy hiện tại có thể chưa phù hợp với phong cách học tập của sinh viên, ảnh hưởng đến khả năng tiếp thu.",
@@ -92,27 +109,82 @@ IMPACT_LEVELS = {
 }
 
 
+def _row_float(row: Optional[pd.Series], col: str) -> Optional[float]:
+    if row is None or col not in row.index:
+        return None
+    v = row[col]
+    if pd.isna(v):
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _use_calibrated_template(
+    group_name: str,
+    raw_feature_row: Optional[pd.Series],
+) -> bool:
+    """True nên dùng văn calibrated_good: chỉ số thực tế tốt, tránh nói 'kém' oan."""
+    if raw_feature_row is None:
+        return False
+    cfg: Dict[str, Any] = REASON_VALUE_CALIBRATION
+
+    if group_name == "Rèn luyện":
+        best = None
+        for col in ("avg_conduct_score", "latest_conduct_score"):
+            x = _row_float(raw_feature_row, col)
+            if x is not None:
+                best = x if best is None else max(best, x)
+        return best is not None and best >= float(cfg["conduct_score_good_min"])
+
+    if group_name == "Chuyên cần":
+        ar = _row_float(raw_feature_row, "attendance_rate")
+        return ar is not None and ar >= float(cfg["attendance_rate_good_min"])
+
+    if group_name == "Học lực":
+        core = _row_float(raw_feature_row, "academic_core_score")
+        if core is not None and core >= float(cfg["academic_avg_good_min"]):
+            return True
+        avg = _row_float(raw_feature_row, "avg_exam_score")
+        recent = _row_float(raw_feature_row, "recent_avg_score")
+        if avg is None:
+            return False
+        ok_avg = avg >= float(cfg["academic_avg_good_min"])
+        ok_recent = recent is None or recent >= float(cfg["academic_recent_ok_min"])
+        return ok_avg and ok_recent
+
+    return False
+
+
 def get_reason_template(
     group_name: str,
     impact_percentage: float,
     context: str = "individual",
-) -> str:
+    raw_feature_row: Optional[pd.Series] = None,
+) -> Tuple[str, bool]:
     """Get reason template based on group name and impact level.
 
     Args:
         group_name: Pedagogical group name (e.g., "Tự học", "Chuyên cần")
         impact_percentage: Impact percentage (0-100)
         context: "individual" or "class" (default: "individual")
+        raw_feature_row: Một dòng DataFrame trước khi encode (để hiệu chỉnh văn bản)
 
     Returns:
-        Reason text template
+        (reason_text_template, calibrated): calibrated True nếu dùng calibrated_good
     """
     templates = (
         CLASS_REASON_TEMPLATES if context == "class" else INDIVIDUAL_REASON_TEMPLATES
     )
 
     if group_name not in templates:
-        return f"Yếu tố {group_name} đang ảnh hưởng đến kết quả học tập."
+        return f"Yếu tố {group_name} đang ảnh hưởng đến kết quả học tập.", False
+
+    if context == "individual" and _use_calibrated_template(group_name, raw_feature_row):
+        cal = templates[group_name].get("calibrated_good")
+        if cal:
+            return cal, True
 
     # Determine impact level
     if impact_percentage >= IMPACT_LEVELS["high"][0]:
@@ -122,7 +194,7 @@ def get_reason_template(
     else:
         level = "low"
 
-    return templates[group_name].get(level, templates[group_name]["medium"])
+    return templates[group_name].get(level, templates[group_name]["medium"]), False
 
 
 def format_reason_with_impact(

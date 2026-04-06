@@ -48,7 +48,12 @@ PEDAGOGICAL_GROUP_PATTERNS: Dict[str, list] = {
     "Học lực": [  # Academic
         "exam_score",
         "avg_exam_score",
+        "median_exam",
+        "min_exam",
         "recent_avg_score",
+        "recent_median",
+        "academic_core",
+        "min_exam_adj",
         "total_subjects",
         "passed_subjects",
         "pass_rate",
@@ -115,6 +120,21 @@ IMPACT_CONFIG: Dict[str, Any] = {
     
     # Round impact percentage to N decimal places
     "impact_decimal_places": 2,
+}
+
+# Khi chỉ số thực tế trên hồ sơ vẫn tốt, không dùng văn bản "kém" cho nhóm SHAP âm
+REASON_VALUE_CALIBRATION: Dict[str, Any] = {
+    # Thang điểm rèn luyện thường 0–100 (file diemrenluyen)
+    "conduct_score_good_min": 80.0,
+    "conduct_score_ok_min": 70.0,
+    # attendance_rate sau merge: 0–1 (tỷ lệ có mặt có trọng số)
+    "attendance_rate_good_min": 0.82,
+    "attendance_rate_ok_min": 0.70,
+    # Điểm các môn (thang CLO 0–6 trong pipeline)
+    "academic_avg_good_min": 4.0,
+    "academic_recent_ok_min": 3.5,
+    # Điểm dự đoán cao → summary nhấn mạnh “tác động tương đối”, không mâu thuẫn
+    "high_predicted_clo_min": 4.0,
 }
 
 # Reason generation configuration

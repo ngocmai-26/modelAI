@@ -1,8 +1,4 @@
-"""Ensemble model combining Random Forest and Gradient Boosting.
-
-This module implements a weighted ensemble of Random Forest Regressor and
-Gradient Boosting Regressor for CLO prediction.
-"""
+"""Ensemble model combining Random Forest and Gradient Boosting."""
 
 from typing import Dict, Optional
 
@@ -222,10 +218,21 @@ class EnsembleModel(BaseModel):
         rf_pred = self.rf_model.predict(X)
         gb_pred = self.gb_model.predict(X)
 
-        # Weighted average
-        ensemble_pred = self.rf_weight * rf_pred + self.gb_weight * gb_pred
+        max_gb = float(self.ensemble_config.get("gb_low_anomaly_max_gb", 0.75))
+        min_gap = float(self.ensemble_config.get("gb_low_anomaly_min_gap", 0.35))
+        br = float(self.ensemble_config.get("gb_low_anomaly_rf_blend", 0.88))
+        low_gb = gb_pred < max_gb
+        gap_ok = (rf_pred - gb_pred) > min_gap
+        anomaly = low_gb & gap_ok
+        gb_use = np.where(
+            anomaly,
+            np.clip(br * rf_pred + (1.0 - br) * gb_pred, 0.0, 6.0),
+            gb_pred,
+        )
 
-        return ensemble_pred
+        # Weighted average; clip to CLO scale [0, 6]
+        ensemble_pred = self.rf_weight * rf_pred + self.gb_weight * gb_use
+        return np.clip(ensemble_pred, 0.0, 6.0)
 
     def get_feature_importance(self) -> Optional[Dict[str, float]]:
         """Get ensemble feature importance.

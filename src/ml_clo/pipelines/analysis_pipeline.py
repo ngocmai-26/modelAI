@@ -225,6 +225,7 @@ class AnalysisPipeline:
             "year",
         ]
         feature_cols = [col for col in class_df.columns if col not in exclude_cols]
+        feature_cols = [c for c in feature_cols if c != "min_exam_score"]
 
         # Remove columns with all NaN
         feature_cols = [col for col in feature_cols if class_df[col].notna().sum() > 0]
