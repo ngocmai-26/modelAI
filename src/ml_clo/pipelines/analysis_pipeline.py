@@ -36,6 +36,7 @@ from ml_clo.data.mergers import (
 )
 from ml_clo.data.preprocessors import preprocess_exam_scores
 from ml_clo.features.feature_builder import build_all_features
+from ml_clo.features.feature_encoder import prepare_features as shared_prepare_features
 from ml_clo.models.ensemble_model import EnsembleModel
 from ml_clo.outputs.schemas import ClassAnalysisOutput
 from ml_clo.reasoning.reason_generator import (
@@ -45,7 +46,11 @@ from ml_clo.reasoning.reason_generator import (
 from ml_clo.utils.exceptions import ModelLoadError
 from ml_clo.utils.logger import get_logger
 from ml_clo.xai.shap_explainer import EnsembleSHAPExplainer
-from ml_clo.xai.shap_postprocess import aggregate_class_shap, process_shap_for_analysis
+from ml_clo.xai.shap_postprocess import (
+    aggregate_class_shap,
+    group_shap_by_pedagogy,
+    process_shap_for_analysis,
+)
 
 logger = get_logger(__name__)
 
@@ -216,67 +221,15 @@ class AnalysisPipeline:
         """
         logger.info("Preparing features for class prediction")
 
-        # Select features (exclude target and ID columns)
-        exclude_cols = [
-            "Student_ID",
-            "Subject_ID",
-            "Lecturer_ID",
-            "exam_score",
-            "year",
-        ]
-        feature_cols = [col for col in class_df.columns if col not in exclude_cols]
-        feature_cols = [c for c in feature_cols if c != "min_exam_score"]
-
-        # Remove columns with all NaN
-        feature_cols = [col for col in feature_cols if class_df[col].notna().sum() > 0]
-
-        # Ensure feature order matches training
-        if self.feature_names:
-            feature_cols = [col for col in self.feature_names if col in feature_cols]
-            missing_features = [col for col in self.feature_names if col not in feature_cols]
-            for feat in missing_features:
-                class_df[feat] = 0
-                feature_cols.append(feat)
-
-        X = class_df[feature_cols].copy()
-
-        # Encode categorical columns (same logic as prediction pipeline)
-        if label_encoders is None:
-            label_encoders = {}
-
-        for col in X.columns:
-            if X[col].dtype == "object" or X[col].dtype.name == "category":
-                if col in label_encoders:
-                    le = label_encoders[col]
-                    X[col] = X[col].fillna("Unknown")
-                    X[col] = le.transform(X[col].astype(str))
-                else:
-                    le = LabelEncoder()
-                    X[col] = X[col].fillna("Unknown")
-                    X[col] = le.fit_transform(X[col].astype(str))
-                    label_encoders[col] = le
-            elif X[col].dtype in [np.int64, np.float64]:
-                X[col] = X[col].fillna(X[col].median() if X[col].notna().any() else 0)
-            else:
-                try:
-                    X[col] = pd.to_numeric(X[col], errors="coerce")
-                    X[col] = X[col].fillna(X[col].median() if X[col].notna().any() else 0)
-                except Exception:
-                    if col in label_encoders:
-                        le = label_encoders[col]
-                    else:
-                        le = LabelEncoder()
-                        label_encoders[col] = le
-                    X[col] = X[col].fillna("Unknown")
-                    X[col] = le.transform(X[col].astype(str))
-
-        # Final check: fill any remaining NaN
-        X = X.apply(pd.to_numeric, errors="coerce")
-        X = X.fillna(0)
-
-        # Ensure feature order matches model
-        if self.feature_names:
-            X = X[self.feature_names]
+        # DESIGN-02: shared encoder. The legacy `label_encoders` parameter is
+        # accepted for backward compatibility but no longer used (hash encoding
+        # is stateless and consistent across train/predict/analyze).
+        del label_encoders  # explicitly mark as unused
+        X, _, _ = shared_prepare_features(
+            class_df,
+            feature_names=self.feature_names,
+            target_column="exam_score",
+        )
 
         logger.info(f"Features prepared: {X.shape}")
 
@@ -410,13 +363,23 @@ class AnalysisPipeline:
             df=None,
         )
 
+        # NEW-05: Pass a class-mean feature row so reason templates can
+        # calibrate against the actual class profile (e.g. good attendance
+        # → avoid phrasing SHAP-negative groups as real-world deficits).
+        class_mean_row = X.mean(numeric_only=True)
+
         # Generate class-level explanation
         explanation = generate_complete_explanation(
             top_negative_impacts=processed["top_negative_impacts"],
             predicted_score=average_predicted_score,
             context="class",
             include_solutions=True,
+            raw_feature_row=class_mean_row,
         )
+
+        # DESIGN-09: real per-group affected counts (not blanket class size)
+        affected_counts = self._count_affected_students_per_group(shap_values_batch)
+        self._inject_affected_counts(explanation, affected_counts, len(class_df))
 
         # Store actual scores if provided
         if actual_scores:
@@ -437,6 +400,44 @@ class AnalysisPipeline:
         )
 
         return output
+
+    def _count_affected_students_per_group(
+        self,
+        shap_values_batch: np.ndarray,
+    ) -> Dict[str, int]:
+        """DESIGN-09: Compute how many students each pedagogical group
+        actually drags down (negative SHAP) at the per-student level.
+
+        Previously we defaulted `affected_students_count` to the full class
+        size, which is misleading for a class where only a minority are hurt
+        by a given group. This uses `group_shap_by_pedagogy` on the full
+        (n_samples, n_features) batch so we get (n_samples,) per group, then
+        counts rows with sum < 0.
+        """
+        per_sample_grouped = group_shap_by_pedagogy(
+            shap_values_batch,
+            feature_names=self.feature_names,
+            df=None,
+        )
+        counts: Dict[str, int] = {}
+        for group_name, vals in per_sample_grouped.items():
+            arr = np.asarray(vals)
+            if arr.ndim == 0:
+                counts[group_name] = int(arr < 0)
+            else:
+                counts[group_name] = int(np.sum(arr < 0))
+        return counts
+
+    @staticmethod
+    def _inject_affected_counts(
+        explanation: Dict,
+        counts: Dict[str, int],
+        fallback_total: int,
+    ) -> None:
+        """Attach affected_students_count to each reason in-place."""
+        for reason in explanation.get("reasons", []):
+            key = reason.get("reason_key") or reason.get("group_name")
+            reason["affected_students_count"] = int(counts.get(key, fallback_total))
 
     def _normalize_clo_scores(
         self,
@@ -594,6 +595,7 @@ class AnalysisPipeline:
                 demographics_df=data["demographics"],
                 teaching_methods_df=data["teaching_methods"],
                 assessment_methods_df=data["assessment_methods"],
+                study_hours_df=data.get("study_hours"),
                 year=2024,
             )
             base_df["exam_score"] = score
@@ -628,11 +630,15 @@ class AnalysisPipeline:
             df=None,
         )
 
+        # NEW-05: calibrate class reasons against the class-mean feature row.
+        class_mean_row = X.mean(numeric_only=True)
+
         explanation = generate_complete_explanation(
             top_negative_impacts=processed["top_negative_impacts"],
             predicted_score=average_predicted_score,
             context="class",
             include_solutions=True,
+            raw_feature_row=class_mean_row,
         )
 
         return ClassAnalysisOutput.from_explanation_dict(

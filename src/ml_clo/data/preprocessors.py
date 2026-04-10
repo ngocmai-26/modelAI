@@ -15,6 +15,7 @@ import pandas as pd
 
 from ml_clo.utils.exceptions import DataValidationError
 from ml_clo.utils.logger import get_logger
+from ml_clo.utils.math_utils import convert_score_10_to_6 as _convert_score_10_to_6_array
 
 logger = get_logger(__name__)
 
@@ -221,24 +222,33 @@ def convert_score_10_to_6(
 
     # Check if scores are in valid range (0-10)
     valid_scores = df[score_column].dropna()
-    if len(valid_scores) > 0:
-        max_score = valid_scores.max()
-
-        # Warn if scores seem to be already in 6-point scale
-        if max_score <= 6.0:
-            logger.warning(
-                f"Scores in {score_column} appear to be already in 6-point scale "
-                f"(max={max_score}). Conversion may not be needed."
-            )
-        elif max_score > 10.0:
-            logger.warning(
-                f"Scores in {score_column} exceed 10.0 (max={max_score}). "
-                f"Some values may be invalid."
-            )
-
-    # Convert: CLO_6 = Score_10 / 10 × 6
     output_col = output_column if output_column else score_column
-    df[output_col] = df[score_column] / 10.0 * 6.0
+
+    if len(valid_scores) == 0:
+        df[output_col] = df[score_column]
+        logger.warning(f"No valid scores in {score_column}; skipping conversion")
+        return df
+
+    max_score = float(valid_scores.max())
+
+    # Guard: if scores already appear to be on the 0-6 CLO scale, skip
+    # the /10*6 conversion to avoid corrupting labels (BUG-02).
+    if max_score <= 6.0:
+        logger.warning(
+            f"Scores in {score_column} appear to already be on the 0-6 CLO scale "
+            f"(max={max_score}); skipping 10-to-6 conversion to avoid corruption."
+        )
+        df[output_col] = df[score_column].clip(lower=0.0, upper=6.0)
+        return df
+
+    if max_score > 10.0:
+        logger.warning(
+            f"Scores in {score_column} exceed 10.0 (max={max_score}). "
+            f"Some values may be invalid."
+        )
+
+    # DESIGN-01: Delegate to math_utils to keep a single source of truth.
+    df[output_col] = _convert_score_10_to_6_array(df[score_column])
 
     # Ensure values are in valid range [0, 6]
     df[output_col] = df[output_col].clip(lower=0.0, upper=6.0)
@@ -479,19 +489,34 @@ def deduplicate_exam_scores(
     if before == 0:
         return df
 
-    dup_mask = df.duplicated(subset=subset, keep=False)
+    # DATA-07: Rows with NaN in any group key cannot be reliably deduplicated
+    # (groupby with dropna=False would lump records from different students/
+    # subjects/years into one bucket and average unrelated scores). Separate
+    # them out and pass through untouched.
+    nan_key_mask = df[subset].isna().any(axis=1)
+    if nan_key_mask.any():
+        logger.warning(
+            f"Skipping deduplication for {int(nan_key_mask.sum())} rows with "
+            f"NaN in group keys {subset}; these rows are passed through as-is."
+        )
+    df_nan = df[nan_key_mask]
+    df_clean = df[~nan_key_mask]
+
+    dup_mask = df_clean.duplicated(subset=subset, keep=False)
     if not dup_mask.any():
         return df
 
     agg: dict = {score_column: "mean"}
-    if "Result" in df.columns:
+    if "Result" in df_clean.columns:
         agg["Result"] = "max"
-    for col in df.columns:
+    for col in df_clean.columns:
         if col in subset or col in agg:
             continue
         agg[col] = "first"
 
-    out = df.groupby(subset, as_index=False, dropna=False).agg(agg)
+    out_clean = df_clean.groupby(subset, as_index=False, dropna=False).agg(agg)
+    # Re-attach rows with NaN keys (untouched) so we don't silently drop data.
+    out = pd.concat([out_clean, df_nan], ignore_index=True) if len(df_nan) else out_clean
     logger.info(
         f"Deduplicated exam rows: {before} -> {len(out)} "
         f"({before - len(out)} rows merged; {score_column}=mean per course key)"

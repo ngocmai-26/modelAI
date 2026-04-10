@@ -102,11 +102,26 @@ CLASS_REASON_TEMPLATES: Dict[str, Dict[str, str]] = {
 }
 
 # Impact level thresholds (percentage)
+# DESIGN-07: 5 finer-grained bands so impact 10.1% and 24.9% no longer
+# render with the same text. Templates still ship 3 base levels (low/
+# medium/high); intermediate bands map to base + an intensity adverb.
 IMPACT_LEVELS = {
-    "low": (1.0, 10.0),      # 1-10%
-    "medium": (10.0, 25.0),  # 10-25%
-    "high": (25.0, 100.0),   # >25%
+    "low": (1.0, 10.0),
+    "medium": (10.0, 25.0),
+    "high": (25.0, 100.0),
 }
+
+# Band → (base_template_key, intensity_adverb)
+# Adverb is prepended to the chosen template text in Vietnamese to nudge
+# the perceived severity within the band without rewriting all templates.
+IMPACT_BANDS = [
+    (1.0, 7.0,   "low",    ""),                  # nhẹ
+    (7.0, 13.0,  "low",    "Có dấu hiệu: "),     # đáng chú ý
+    (13.0, 18.0, "medium", ""),                  # trung bình thấp
+    (18.0, 25.0, "medium", "Đáng kể: "),         # trung bình cao
+    (25.0, 35.0, "high",   ""),                  # cao
+    (35.0, 100.0, "high",  "Rất nghiêm trọng: "),# rất cao
+]
 
 
 def _row_float(row: Optional[pd.Series], col: str) -> Optional[float]:
@@ -186,15 +201,22 @@ def get_reason_template(
         if cal:
             return cal, True
 
-    # Determine impact level
-    if impact_percentage >= IMPACT_LEVELS["high"][0]:
-        level = "high"
-    elif impact_percentage >= IMPACT_LEVELS["medium"][0]:
-        level = "medium"
+    # DESIGN-07: Pick band → base template key + intensity adverb so two
+    # impacts inside the same coarse level (e.g. 10.1% vs 24.9%) no longer
+    # render with identical text.
+    base_key = "medium"
+    adverb = ""
+    for lo, hi, key, adv in IMPACT_BANDS:
+        if lo <= impact_percentage < hi:
+            base_key, adverb = key, adv
+            break
     else:
-        level = "low"
+        # Above the top band (>= 100): treat as the highest band.
+        if impact_percentage >= IMPACT_BANDS[-1][1]:
+            base_key, adverb = IMPACT_BANDS[-1][2], IMPACT_BANDS[-1][3]
 
-    return templates[group_name].get(level, templates[group_name]["medium"]), False
+    text = templates[group_name].get(base_key, templates[group_name]["medium"])
+    return (adverb + text if adverb else text), False
 
 
 def format_reason_with_impact(

@@ -37,9 +37,11 @@ from ml_clo.data.mergers import (
 )
 from ml_clo.data.preprocessors import preprocess_exam_scores
 from ml_clo.features.feature_builder import build_all_features
+from ml_clo.features.feature_encoder import prepare_features as shared_prepare_features
 from ml_clo.models.ensemble_model import EnsembleModel
 from ml_clo.outputs.schemas import IndividualAnalysisOutput
 from ml_clo.reasoning.reason_generator import generate_complete_explanation
+from ml_clo.utils.audit_log import log_prediction
 from ml_clo.utils.exceptions import ModelLoadError
 from ml_clo.utils.logger import get_logger
 from ml_clo.utils.hash_utils import stable_hash_int
@@ -52,12 +54,46 @@ logger = get_logger(__name__)
 class PredictionPipeline:
     """Prediction pipeline for individual student CLO prediction.
 
-    Model đã train chỉ nhận **feature vector** (khoảng 76 số) → điểm CLO. Để có feature
-    vector cho một sinh viên cần dữ liệu gốc (điểm thi, rèn luyện, nhân khẩu, ...). Có hai cách:
+    Model đã train chỉ nhận **feature vector** (khoảng 76 số) → điểm CLO.
+    Để có feature vector cho một sinh viên cần dữ liệu gốc (điểm thi, rèn luyện,
+    nhân khẩu, ...). Pipeline hỗ trợ **hai mode khởi tạo** — chọn theo use case:
 
-    1. **Truyền data paths khi khởi tạo**: data được load và cache một lần, sau đó
-       predict(student_id, subject_id, lecturer_id) không cần path.
-    2. **Truyền paths vào predict() mỗi lần** (cách cũ, vẫn hỗ trợ).
+    **Mode 1 — Cache mode (khuyến nghị cho backend phục vụ nhiều request):**
+    Truyền data paths vào ``__init__``. Data được load + preprocess MỘT LẦN
+    và cache trong instance. Mỗi ``predict()`` call chỉ cần ID, không tốn IO.
+
+    .. code-block:: python
+
+        pipeline = PredictionPipeline(
+            model_path="models/model.joblib",
+            exam_scores_path="data/DiemTong.xlsx",
+            demographics_path="data/nhankhau.xlsx",
+            teaching_methods_path="data/PPGDfull.xlsx",
+            assessment_methods_path="data/PPDGfull.xlsx",
+        )
+        pipeline.load_model()
+        out = pipeline.predict(student_id="19050006", subject_id="INF0823",
+                               lecturer_id="90316")
+
+    **Mode 2 — Per-call mode (phù hợp script CLI dùng một lần):**
+    Khởi tạo với ``model_path`` only, truyền data paths vào ``predict()`` mỗi
+    lần gọi. Mỗi call sẽ reload + preprocess data → chậm hơn, nhưng đơn giản
+    cho ad-hoc usage.
+
+    .. code-block:: python
+
+        pipeline = PredictionPipeline(model_path="models/model.joblib")
+        pipeline.load_model()
+        out = pipeline.predict(
+            student_id="19050006", subject_id="INF0823", lecturer_id="90316",
+            exam_scores_path="data/DiemTong.xlsx",
+            demographics_path="data/nhankhau.xlsx",
+            teaching_methods_path="data/PPGDfull.xlsx",
+            assessment_methods_path="data/PPDGfull.xlsx",
+        )
+
+    Mode 1 được auto-trigger khi ``__init__`` nhận đủ tối thiểu
+    ``exam_scores_path`` HOẶC bộ ``(demographics + teaching + assessment)``.
     """
 
     def __init__(
@@ -310,13 +346,12 @@ class PredictionPipeline:
                 demographics_df=data.get("demographics"),
                 teaching_methods_df=data.get("teaching_methods"),
                 assessment_methods_df=data.get("assessment_methods"),
+                study_hours_df=data.get("study_hours"),
                 year=2024,
             )
             full_exam_df = pd.DataFrame(columns=["Student_ID", "Subject_ID", "Lecturer_ID", "year", "exam_score"])
             if data.get("conduct_scores") is not None:
                 base_df = merge_exam_and_conduct_scores(base_df, data["conduct_scores"], year_column="year")
-            if data.get("study_hours") is not None:
-                base_df = merge_study_hours(base_df, data["study_hours"], year_column="year")
             if data.get("attendance") is not None:
                 base_df = merge_attendance(base_df, data["attendance"], year_column="year")
             training_df = build_all_features(
@@ -344,54 +379,12 @@ class PredictionPipeline:
         """
         logger.info("Preparing features for prediction")
 
-        # Select features (exclude target and ID columns)
-        exclude_cols = [
-            "Student_ID",
-            "Subject_ID",
-            "Lecturer_ID",
-            "exam_score",
-            "year",
-        ]
-        feature_cols = [col for col in student_df.columns if col not in exclude_cols]
-        feature_cols = [c for c in feature_cols if c != "min_exam_score"]
-
-        # Remove columns with all NaN
-        feature_cols = [col for col in feature_cols if student_df[col].notna().sum() > 0]
-
-        # Ensure feature order matches training
-        if self.feature_names:
-            # Use only features that exist in both
-            feature_cols = [col for col in self.feature_names if col in feature_cols]
-            # Add missing features with zeros
-            missing_features = [col for col in self.feature_names if col not in feature_cols]
-            for feat in missing_features:
-                student_df[feat] = 0
-                feature_cols.append(feat)
-
-        X = student_df[feature_cols].copy()
-
-        # Encode categorical columns deterministically.
-        # NOTE: We intentionally do NOT fit LabelEncoder here because doing so
-        # on a single-record input during prediction breaks train/predict consistency.
-        for col in X.columns:
-            if X[col].dtype == "object" or X[col].dtype.name == "category":
-                X[col] = X[col].map(lambda v: stable_hash_int(v))
-            elif X[col].dtype in [np.int64, np.float64]:
-                X[col] = X[col].fillna(X[col].median() if X[col].notna().any() else 0)
-            else:
-                try:
-                    X[col] = pd.to_numeric(X[col], errors="coerce")
-                    X[col] = X[col].fillna(X[col].median() if X[col].notna().any() else 0)
-                except Exception:
-                    X[col] = X[col].map(lambda v: stable_hash_int(v))
-
-        # Final check: fill any remaining NaN
-        X = X.apply(pd.to_numeric, errors="coerce")
-        X = X.fillna(0)
-
-        # Ensure feature order matches model
-        if self.feature_names:
-            X = X[self.feature_names]
+        # DESIGN-02: shared encoder. Note: predict path does NOT need y.
+        X, _, _ = shared_prepare_features(
+            student_df,
+            feature_names=self.feature_names,
+            target_column="exam_score",
+        )
 
         logger.info(f"Features prepared: {X.shape}")
 
@@ -504,6 +497,16 @@ class PredictionPipeline:
             lecturer_id=lecturer_id,
             predicted_clo_score=predicted_score,
             actual_clo_score=actual_clo_score,
+        )
+
+        # MISSING-06: audit trail (no-op when audit path not configured)
+        log_prediction(
+            student_id=student_id,
+            subject_id=subject_id,
+            lecturer_id=lecturer_id,
+            predicted_score=predicted_score,
+            actual_score=actual_clo_score,
+            model_version=getattr(self.model, "version", None),
         )
 
         logger.info(

@@ -45,12 +45,31 @@ Xác định rõ API, hàm và logic nào sẽ bị **loại bỏ** hoặc **tha
 
 ---
 
+## Thay đổi thêm (bug fix round 2026-04-10)
+
+Sau triển khai yêu cầu mới, các thành phần sau đã được cập nhật:
+
+| Thành phần | Hành động | Ghi chú |
+| --- | --- | --- |
+| `LabelEncoder` trong 3 pipeline | **Thay thế** | Dùng `stable_hash_int` (hash_v2) qua shared `feature_encoder.py` |
+| `prepare_features()` — 3 bản copy | **Hợp nhất** | Shared `features/feature_encoder.py` |
+| `EnsembleModel` — weights cố định | **Bổ sung** | `set_weights()`, `predict_with_uncertainty()` |
+| `EnsembleSHAPExplainer` — cache vĩnh viễn | **Bổ sung** | `clear_cache()` |
+| `base_model.py` — không lưu metadata | **Bổ sung** | `extra_metadata` (encoding_method, ensemble_config) |
+| `templates.py` — 3 impact levels | **Thay thế** | 6 `IMPACT_BANDS` chi tiết |
+| `create_student_record_from_ids()` | **Bổ sung** | Thêm `study_hours_df` parameter |
+| `TrainingPipeline` | **Bổ sung** | `cross_validate()`, `report_data_quality()` |
+| `PredictionPipeline` | **Bổ sung** | Audit log via `utils/audit_log.py` |
+| `AnalysisPipeline` | **Bổ sung** | Per-group `affected_students_count` thực tế |
+| CLI scripts | **Bổ sung** | Input validation (ranges, empty IDs, actual_score) |
+
+---
+
 ## Không thay đổi (giữ nguyên)
 
-- Training pipeline (vẫn dùng DiemTong cho train)
-- XAI/SHAP, reason generator, solution mapper
-- Model architecture (Ensemble, feature config)
-- Output schemas (IndividualAnalysisOutput, ClassAnalysisOutput) — có thể thêm field `actual_clo_score`
+- Training pipeline data flow (vẫn dùng DiemTong cho train)
+- Model architecture (Ensemble RF+GB, feature config)
+- Output schemas interface (IndividualAnalysisOutput, ClassAnalysisOutput) — thêm field `calibrated`, `affected_students_count` nhưng backward compatible
 
 ---
 
@@ -60,3 +79,6 @@ Khi triển khai xong:
 
 1. **Predict:** Có thể gọi không cần `exam_scores_path` nếu có `demographics_path`, `teaching_methods_path`, `assessment_methods_path`.
 2. **Analyze class:** Chuyển sang dùng `--scores-file` thay vì `--exam-scores` (filter DiemTong).
+3. **Model cũ:** Model train trước hash_v2 sẽ bị reject khi load — cần retrain bằng pipeline mới.
+4. **Audit log:** Opt-in — gọi `set_audit_log_path("logs/predictions.jsonl")` trước khi predict.
+5. **Uncertainty:** Dùng `model.predict_with_uncertainty(X)` để lấy confidence interval.

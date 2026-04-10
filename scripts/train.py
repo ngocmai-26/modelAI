@@ -145,8 +145,21 @@ Examples:
 
 
 def validate_paths(args):
-    """Validate that input files exist."""
+    """Validate input files and numeric arguments (MISSING-01)."""
     errors = []
+
+    # Numeric range checks — argparse only enforces type, not bounds.
+    if not (0.0 < args.test_size < 1.0):
+        errors.append(f"--test-size must be in (0, 1), got {args.test_size}")
+    if not (0.0 < args.validation_size < 1.0):
+        errors.append(f"--validation-size must be in (0, 1), got {args.validation_size}")
+    if args.test_size + args.validation_size >= 1.0:
+        errors.append(
+            f"--test-size + --validation-size must be < 1.0, got "
+            f"{args.test_size + args.validation_size:.3f}"
+        )
+    if args.random_state < 0:
+        errors.append(f"--random-state must be non-negative, got {args.random_state}")
 
     # Check required file
     if not Path(args.exam_scores).exists():

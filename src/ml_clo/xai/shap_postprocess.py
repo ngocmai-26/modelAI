@@ -32,7 +32,10 @@ def filter_shap_values(
         Tuple of (filtered_shap_values, filtered_feature_names)
     """
     if threshold is None:
-        threshold = SHAP_CONFIG.get("shap_threshold", 0.01)
+        # DESIGN-06: Single source of truth — read from xai_config.SHAP_CONFIG.
+        # The fallback constant matches the config default and exists only as
+        # a safety net if SHAP_CONFIG is missing the key entirely.
+        threshold = SHAP_CONFIG["shap_threshold"]
 
     # Calculate mean absolute SHAP per feature across samples
     if len(shap_values.shape) == 1:
@@ -43,6 +46,17 @@ def filter_shap_values(
     # Filter features above threshold
     mask = mean_abs_shap >= threshold
     filtered_indices = np.where(mask)[0]
+
+    # BUG-04: If threshold filters out every feature, fall back to the
+    # top-K features by absolute SHAP so downstream reasoning still has
+    # something to work with (instead of returning an empty reason list).
+    if len(filtered_indices) == 0 and len(feature_names) > 0:
+        fallback_k = min(5, len(feature_names))
+        logger.warning(
+            f"No SHAP values above threshold {threshold}; "
+            f"falling back to top-{fallback_k} features by absolute SHAP."
+        )
+        filtered_indices = np.argsort(mean_abs_shap)[-fallback_k:][::-1]
 
     if len(shap_values.shape) == 1:
         filtered_shap = shap_values[filtered_indices]

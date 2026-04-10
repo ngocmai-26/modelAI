@@ -57,6 +57,18 @@ class EnsembleSHAPExplainer:
 
         logger.info("Initialized SHAP explainer for ensemble model")
 
+    def clear_cache(self) -> None:
+        """PERF-01: Drop cached TreeExplainer instances.
+
+        TreeExplainers hold references to fitted trees and can use a
+        non-trivial amount of memory for large RF/GB models. Long-running
+        services that load multiple model versions should call this between
+        analyses to bound memory usage.
+        """
+        self._rf_explainer_cached = None
+        self._gb_explainer_cached = None
+        logger.debug("Cleared SHAP explainer cache")
+
     def _get_rf_explainer(self) -> shap.TreeExplainer:
         """Get or create Random Forest explainer.
 
@@ -126,11 +138,37 @@ class EnsembleSHAPExplainer:
             rf_shap_values = rf_shap_values.reshape(1, -1)
             gb_shap_values = gb_shap_values.reshape(1, -1)
 
-        # Combine SHAP values using ensemble weights
-        ensemble_shap_values = (
-            self.model.rf_weight * rf_shap_values
-            + self.model.gb_weight * gb_shap_values
-        )
+        # NEW-01: Mirror the anomaly blending done in EnsembleModel.predict().
+        # When gb_low_anomaly fires for a row, the effective prediction is
+        #   final = rf_w * rf_pred + gb_w * (br*rf_pred + (1-br)*gb_pred)
+        # which is linear in the sub-model outputs, so the equivalent SHAP
+        # values are obtained by blending rf_shap/gb_shap with the same
+        # effective weights — computed per-row to stay faithful.
+        rf_pred = self.model.rf_model.predict(X)
+        gb_pred = self.model.gb_model.predict(X)
+        cfg = self.model.ensemble_config
+        max_gb = float(cfg.get("gb_low_anomaly_max_gb", 0.75))
+        min_gap = float(cfg.get("gb_low_anomaly_min_gap", 0.35))
+        br = float(cfg.get("gb_low_anomaly_rf_blend", 0.88))
+        anomaly = (gb_pred < max_gb) & ((rf_pred - gb_pred) > min_gap)
+
+        base_rf_w = float(self.model.rf_weight)
+        base_gb_w = float(self.model.gb_weight)
+        # Per-row effective weights: (rf_w + gb_w*br, gb_w*(1-br)) when anomaly
+        eff_rf_w = np.where(anomaly, base_rf_w + base_gb_w * br, base_rf_w)
+        eff_gb_w = np.where(anomaly, base_gb_w * (1.0 - br), base_gb_w)
+        # Reshape for broadcasting over features
+        eff_rf_w = eff_rf_w.reshape(-1, 1)
+        eff_gb_w = eff_gb_w.reshape(-1, 1)
+
+        ensemble_shap_values = eff_rf_w * rf_shap_values + eff_gb_w * gb_shap_values
+
+        if anomaly.any():
+            logger.debug(
+                f"gb_low_anomaly applied to {int(anomaly.sum())}/{len(anomaly)} "
+                f"instance(s); SHAP values blended with effective weights "
+                f"(rf_blend={br})."
+            )
 
         logger.debug(
             f"Computed SHAP values for {X.shape[0]} instance(s), "

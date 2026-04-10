@@ -170,8 +170,13 @@ Examples (chế độ cũ — --exam-scores, deprecated):
 
 
 def validate_paths(args):
-    """Validate that input files exist."""
+    """Validate input files and IDs (MISSING-01)."""
     errors = []
+
+    # Identifier sanity checks
+    for name, value in (("--subject-id", args.subject_id), ("--lecturer-id", args.lecturer_id)):
+        if value is None or str(value).strip() == "":
+            errors.append(f"{name} must not be empty")
 
     # Check model file
     if not Path(args.model).exists():

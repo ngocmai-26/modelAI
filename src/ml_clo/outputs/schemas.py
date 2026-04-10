@@ -24,6 +24,7 @@ class Reason:
     reason_text: str
     impact_percentage: float
     solutions: List[str] = field(default_factory=list)
+    calibrated: bool = False
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization.
@@ -36,6 +37,7 @@ class Reason:
             "reason_text": self.reason_text,
             "impact_percentage": round(self.impact_percentage, 2),
             "solutions": self.solutions,
+            "calibrated": self.calibrated,
         }
 
     def to_json(self) -> str:
@@ -143,10 +145,11 @@ class IndividualAnalysisOutput:
         """
         reasons = [
             Reason(
-                reason_key=reason_dict["group_name"],
+                reason_key=reason_dict.get("reason_key") or reason_dict["group_name"],
                 reason_text=reason_dict["reason_text"],
                 impact_percentage=reason_dict["impact_percentage"],
                 solutions=reason_dict.get("solutions", []),
+                calibrated=bool(reason_dict.get("calibrated", False)),
             )
             for reason_dict in explanation.get("reasons", [])
         ]
@@ -180,6 +183,7 @@ class ClassReason:
     average_impact_percentage: float
     affected_students_count: int
     priority_solutions: List[str] = field(default_factory=list)
+    calibrated: bool = False
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization.
@@ -193,6 +197,7 @@ class ClassReason:
             "average_impact_percentage": round(self.average_impact_percentage, 2),
             "affected_students_count": self.affected_students_count,
             "priority_solutions": self.priority_solutions,
+            "calibrated": self.calibrated,
         }
 
     def to_json(self) -> str:
@@ -312,11 +317,12 @@ class ClassAnalysisOutput:
         """
         common_reasons = [
             ClassReason(
-                reason_key=reason_dict["group_name"],
+                reason_key=reason_dict.get("reason_key") or reason_dict["group_name"],
                 reason_text=reason_dict["reason_text"],
                 average_impact_percentage=reason_dict["impact_percentage"],
-                affected_students_count=total_students or 0,  # Default to total if not specified
+                affected_students_count=int(reason_dict.get("affected_students_count", total_students or 0)),
                 priority_solutions=reason_dict.get("solutions", []),
+                calibrated=bool(reason_dict.get("calibrated", False)),
             )
             for reason_dict in explanation.get("reasons", [])
         ]

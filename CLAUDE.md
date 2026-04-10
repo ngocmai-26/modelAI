@@ -8,9 +8,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Core capabilities:**
 - Ensemble regression (Random Forest + Gradient Boosting) for CLO score prediction
-- SHAP TreeExplainer for feature attribution
-- Rule-based reason/solution generation in Vietnamese (no LLM)
-- Three pipelines: `TrainingPipeline`, `PredictionPipeline`, `AnalysisPipeline`
+- SHAP TreeExplainer with anomaly-aware blending for feature attribution
+- Rule-based reason/solution generation in Vietnamese (no LLM), 6 impact bands
+- Three pipelines: `TrainingPipeline` (k-fold CV, data quality report), `PredictionPipeline` (audit log), `AnalysisPipeline` (per-group affected count)
+- Prediction uncertainty via RF per-tree variance (`predict_with_uncertainty`)
+- Deterministic hash encoding (`stable_hash_int`, hash_v2, mod 2^31-1) — models self-validate encoding on load
 
 ## Environment Setup
 
@@ -87,30 +89,37 @@ python scripts/analyze_class.py \
 
 ```
 src/ml_clo/
-├── pipelines/          # Entry points: TrainingPipeline, PredictionPipeline, AnalysisPipeline
+├── pipelines/          # TrainingPipeline (cross_validate, report_data_quality),
+│                       #   PredictionPipeline (audit log), AnalysisPipeline (affected_students_count)
 ├── data/               # loaders.py, preprocessors.py, encoders.py, validators.py, mergers.py
-├── features/           # feature_builder.py, feature_groups.py
-├── models/             # base_model.py, ensemble_model.py, model_evaluator.py
-├── xai/                # shap_explainer.py, shap_postprocess.py
-├── reasoning/          # reason_generator.py, solution_mapper.py, templates.py
-├── outputs/            # schemas.py (IndividualAnalysisOutput, ClassAnalysisOutput)
+├── features/           # feature_builder.py, feature_groups.py, feature_encoder.py (shared prepare)
+├── models/             # base_model.py (extra_metadata), ensemble_model.py (set_weights,
+│                       #   predict_with_uncertainty, gb_low_anomaly), model_evaluator.py
+├── xai/                # shap_explainer.py (anomaly-aware, clear_cache), shap_postprocess.py
+├── reasoning/          # reason_generator.py, solution_mapper.py, templates.py (IMPACT_BANDS)
+├── outputs/            # schemas.py (IndividualAnalysisOutput, ClassAnalysisOutput, calibrated)
 ├── config/             # feature_config.py, model_config.py, xai_config.py
-└── utils/              # logger.py, exceptions.py, math_utils.py, io_utils.py
+└── utils/              # logger.py, exceptions.py, math_utils.py, io_utils.py,
+                        #   hash_utils.py (stable_hash_int), audit_log.py
 ```
 
 **Data flow:**
 1. `data/` modules load Excel files and normalize column names
-2. `features/feature_builder.py` computes aggregate features (conduct trends, pass rates, etc.)
-3. `models/ensemble_model.py` trains weighted RF + GB ensemble, saves as `.joblib`
-4. `xai/shap_explainer.py` computes SHAP values; `shap_postprocess.py` groups them into 7 pedagogical categories: Tự học, Chuyên cần, Rèn luyện, Học lực, Giảng dạy, Đánh giá, Cá nhân
-5. `reasoning/` maps SHAP groups → Vietnamese reason text + actionable solutions (rule-based)
-6. `outputs/schemas.py` serializes to `IndividualAnalysisOutput` or `ClassAnalysisOutput`
+2. `features/feature_encoder.py` (shared) selects columns, applies `stable_hash_int` to categoricals
+3. `features/feature_builder.py` computes aggregate features (conduct trends, pass rates, etc.) via vectorized groupby
+4. `models/ensemble_model.py` trains weighted RF + GB ensemble with `gb_low_anomaly` blending, saves as `.joblib` with `extra_metadata` (encoding_method, ensemble_config snapshot)
+5. `xai/shap_explainer.py` computes anomaly-aware SHAP values (effective weights match prediction blending); `shap_postprocess.py` groups into 7 pedagogical categories: Tự học, Chuyên cần, Rèn luyện, Học lực, Giảng dạy, Đánh giá, Cá nhân
+6. `reasoning/` maps SHAP groups → Vietnamese reason text (6 impact bands) + actionable solutions (rule-based, calibrated against raw feature values)
+7. `outputs/schemas.py` serializes to `IndividualAnalysisOutput` or `ClassAnalysisOutput` (with `calibrated` flag, `affected_students_count`)
 
 **Key design decisions:**
-- All training data uses CLO scale (0–6). Exam scores in hệ 10 are converted: `CLO_6 = Score_10 / 10 × 6`
+- All training data uses CLO scale (0–6). Exam scores in hệ 10 are converted: `CLO_6 = Score_10 / 10 × 6` (guarded: skip if max ≤ 6)
 - Model is not bundled — backends receive the `.joblib` path via `model_path` parameter
+- Models self-validate `encoding_method` on load — incompatible models are rejected with clear retrain message
 - `analyze_class_from_scores()` is the primary class analysis API; the older `--exam-scores` filter is deprecated
-- `--exam-scores` is optional for prediction; fallback uses `create_student_record_from_ids` when student/subject/lecturer not in DiemTong
+- `--exam-scores` is optional for prediction; fallback uses `create_student_record_from_ids` (with study_hours) when student/subject/lecturer not in DiemTong
+- `predict_with_uncertainty()` provides RF per-tree stdev as confidence proxy
+- Prediction audit trail via `utils/audit_log.py` (opt-in JSONL)
 
 ## Data Files
 

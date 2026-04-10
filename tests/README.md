@@ -4,17 +4,21 @@ This directory contains unit tests and integration tests for the ml_clo library.
 
 ## Test Structure
 
-```
+```text
 tests/
 ├── __init__.py
 ├── conftest.py              # Shared fixtures and configuration
 ├── unit/                    # Unit tests
-│   ├── test_data/          # Data module tests
-│   ├── test_features/      # Features module tests
-│   ├── test_models/        # Models module tests
-│   └── test_xai/           # XAI module tests
+│   ├── test_data/          # Data module tests (loaders, mergers, preprocessors, encoders, validators)
+│   ├── test_features/      # Features module tests (feature_builder, feature_groups)
+│   ├── test_models/        # Models module tests (ensemble train/predict/save/load)
+│   ├── test_xai/           # XAI module tests (SHAP explainer, batch, importance)
+│   └── test_missing05.py   # Gap coverage: hash, anomaly, SHAP fallback, impact bands,
+│                            #   set_weights, clear_cache, predict_with_uncertainty
 ├── integration/             # Integration tests
-│   └── test_pipelines/     # Pipeline integration tests
+│   ├── test_pipelines/     # Pipeline integration tests (train, predict, analysis, save/load)
+│   ├── test_prediction_differentiation.py
+│   └── test_attendance_and_student_logic.py
 └── fixtures/               # Test data fixtures
 ```
 
