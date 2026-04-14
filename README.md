@@ -108,13 +108,13 @@ python scripts/train.py --exam-scores data/DiemTong.xlsx --output models/model.j
 # Đủ nguồn dữ liệu (gồm điểm danh)
 python scripts/train.py \
   --exam-scores data/DiemTong.xlsx \
+  --output models/model.joblib \
   --conduct-scores data/diemrenluyen.xlsx \
   --demographics data/nhankhau.xlsx \
   --teaching-methods data/PPGDfull.xlsx \
   --assessment-methods data/PPDGfull.xlsx \
   --study-hours data/tuhoc.xlsx \
-  --attendance "data/Dữ liệu điểm danh Khoa FIRA.xlsx" \
-  --output models/model.joblib
+  --attendance "data/Dữ liệu điểm danh Khoa FIRA.xlsx"
 
 # Mặc định: chia tập theo Student_ID (GroupShuffleSplit). Muốn chia ngẫu nhiên theo dòng:
 #   thêm --no-group-split
