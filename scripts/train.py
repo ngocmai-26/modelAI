@@ -108,6 +108,12 @@ Examples:
         default=None,
         help="Path to attendance (điểm danh) Excel file (optional)",
     )
+    parser.add_argument(
+        "--survey",
+        type=str,
+        default=None,
+        help="Path to student survey response Excel file (optional)",
+    )
 
     # Training parameters
     parser.add_argument(
@@ -184,6 +190,9 @@ def validate_paths(args):
     if args.attendance and not Path(args.attendance).exists():
         errors.append(f"Attendance file not found: {args.attendance}")
 
+    if args.survey and not Path(args.survey).exists():
+        errors.append(f"Survey file not found: {args.survey}")
+
     # Check output directory exists
     output_path = Path(args.output)
     if not output_path.parent.exists():
@@ -223,6 +232,8 @@ def main():
         print(f"Study hours: {args.study_hours}")
     if args.attendance:
         print(f"Attendance: {args.attendance}")
+    if args.survey:
+        print(f"Survey: {args.survey}")
     print(f"Output: {args.output}")
     print(f"Random state: {args.random_state}")
     print(f"Test size: {args.test_size}")
@@ -248,6 +259,7 @@ def main():
             assessment_methods_path=args.assessment_methods,
             study_hours_path=args.study_hours,
             attendance_path=args.attendance,
+            survey_path=args.survey,
         )
 
         # Print summary
