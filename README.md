@@ -5,9 +5,14 @@ Thư viện Python để dự đoán điểm CLO (Course Learning Outcome, thang
 ## Tính năng
 
 - **Regression**: Ensemble Random Forest + Gradient Boosting, dự đoán điểm CLO 0–6
-- **XAI**: SHAP TreeExplainer, lý do ảnh hưởng theo nhóm sư phạm (Tự học, Chuyên cần, Rèn luyện, Học lực, Giảng dạy, Đánh giá, Cá nhân)
-- **Lý do & giải pháp**: Rule-based (không dùng LLM), tiếng Việt, gợi ý hành động
-- **Pipeline**: Train, dự đoán cá nhân, phân tích lớp (aggregate SHAP, lưu dữ liệu cho retrain)
+- **XAI**: SHAP TreeExplainer với anomaly-aware blending — lý do ảnh hưởng theo 7 nhóm sư phạm (Tự học, Chuyên cần, Rèn luyện, Học lực, Giảng dạy, Đánh giá, Cá nhân)
+- **Lý do & giải pháp**: Rule-based (không dùng LLM), tiếng Việt, 6 mức impact chi tiết, gợi ý hành động
+- **Pipeline**: Train, dự đoán cá nhân, phân tích lớp (aggregate SHAP, per-group affected count, lưu dữ liệu cho retrain)
+- **Uncertainty**: `predict_with_uncertainty()` — confidence interval (±2σ) từ RF per-tree variance
+- **Cross-validation**: `cross_validate()` — K-fold CV (GroupKFold by Student_ID hoặc KFold)
+- **Data quality**: `report_data_quality()` — missing rate, duplicate keys, target stats khi train
+- **Audit log**: JSONL prediction audit trail (opt-in via `set_audit_log_path()`)
+- **Encoding**: Deterministic hash encoding (`stable_hash_int`, mod 2^31−1) — không cần `LabelEncoder`, model tự validate encoding_method khi load
 
 ## Yêu cầu
 
@@ -63,14 +68,14 @@ modelAI/
 ├── .venv/                # Virtual environment của dự án (luôn dùng khi chạy pip/pytest/scripts)
 ├── src/ml_clo/           # Thư viện chính
 │   ├── data/             # Loaders, preprocessors, encoders, validators, mergers
-│   ├── features/         # Feature groups, feature builder
+│   ├── features/         # Feature groups, feature builder, feature_encoder (shared)
 │   ├── config/           # feature_config, model_config, xai_config
-│   ├── models/           # Base, ensemble, evaluator
-│   ├── xai/              # SHAP explainer, postprocess
-│   ├── reasoning/        # Templates, solution mapper, reason generator
+│   ├── models/           # Base, ensemble (set_weights, predict_with_uncertainty), evaluator
+│   ├── xai/              # SHAP explainer (anomaly-aware, clear_cache), postprocess
+│   ├── reasoning/        # Templates (6 impact bands), solution mapper, reason generator
 │   ├── outputs/          # Schemas (IndividualAnalysisOutput, ClassAnalysisOutput)
-│   ├── pipelines/        # Train, Predict, Analysis
-│   └── utils/            # Logger, exceptions, math_utils, io_utils
+│   ├── pipelines/        # Train (cross_validate, report_data_quality), Predict, Analysis
+│   └── utils/            # Logger, exceptions, math_utils, io_utils, hash_utils, audit_log
 ├── scripts/              # CLI
 │   ├── train.py
 │   ├── predict.py
@@ -103,13 +108,13 @@ python scripts/train.py --exam-scores data/DiemTong.xlsx --output models/model.j
 # Đủ nguồn dữ liệu (gồm điểm danh)
 python scripts/train.py \
   --exam-scores data/DiemTong.xlsx \
+  --output models/model.joblib \
   --conduct-scores data/diemrenluyen.xlsx \
   --demographics data/nhankhau.xlsx \
   --teaching-methods data/PPGDfull.xlsx \
   --assessment-methods data/PPDGfull.xlsx \
   --study-hours data/tuhoc.xlsx \
-  --attendance "data/Dữ liệu điểm danh Khoa FIRA.xlsx" \
-  --output models/model.joblib
+  --attendance "data/Dữ liệu điểm danh Khoa FIRA.xlsx"
 
 # Mặc định: chia tập theo Student_ID (GroupShuffleSplit). Muốn chia ngẫu nhiên theo dòng:
 #   thêm --no-group-split
@@ -247,6 +252,28 @@ class_result = analysis_pipeline.analyze_class_from_scores(
     assessment_methods_path="data/PPDGfull.xlsx",
 )
 # class_result: ClassAnalysisOutput — class_result.to_dict() / .to_json() cho API
+
+# Prediction với confidence interval (MISSING-03)
+result_unc = pred_pipeline.model.predict_with_uncertainty(X)
+# result_unc["prediction"], result_unc["rf_std"],
+# result_unc["confidence_interval_low"], result_unc["confidence_interval_high"]
+
+# K-fold cross-validation (MISSING-02)
+trainer = TrainingPipeline()
+data = trainer.load_data(exam_scores_path="data/DiemTong.xlsx")
+training_df = trainer.prepare_training_dataset(data)
+X, y, _ = trainer.prepare_features(training_df)
+cv_metrics = trainer.cross_validate(X, y, n_splits=5)
+# cv_metrics: cv_mae_mean, cv_mae_std, cv_r2_mean, cv_r2_std
+
+# Audit log (MISSING-06) — opt-in
+from ml_clo.utils.audit_log import set_audit_log_path
+set_audit_log_path("logs/predictions.jsonl")
+# Sau đó mỗi predict() tự ghi 1 dòng JSONL
+
+# Chỉnh ensemble weights post-load (DESIGN-08)
+model = pred_pipeline.model
+model.set_weights(rf_weight=0.7, gb_weight=0.3)
 ```
 
 ## Test
@@ -326,17 +353,23 @@ Rồi `import ml_clo` như trên. Có thể copy thư mục `dist/` hoặc đưa
 
 ---
 
-## Yêu cầu mới — Đã triển khai (2026-03)
+## Yêu cầu mới — Đã triển khai (2026-03 → 2026-04)
 
 **Báo cáo đánh giá tính khả thi:** [docs/FEASIBILITY_REPORT_NEW_REQUIREMENTS.md](docs/FEASIBILITY_REPORT_NEW_REQUIREMENTS.md)
 
 **Kế hoạch triển khai:** [docs/IMPLEMENTATION_PLAN_NEW_REQUIREMENTS.md](docs/IMPLEMENTATION_PLAN_NEW_REQUIREMENTS.md)
 
+**Danh sách lỗi & trạng thái fix:** [ISSUES.md](ISSUES.md) — 37/41 fixed, 4 LOW accepted
+
 Tóm tắt yêu cầu mới (đã triển khai):
 
-- **Phân tích lớp:** API `analyze_class_from_scores()` — đầu vào môn, mã GV, danh sách điểm CLO. CLI: `--scores-file`.
-- **Dự đoán cá nhân:** Không bắt buộc DiemTong. `--actual-score` cho môn đã học. Fallback `create_student_record_from_ids` khi SV/môn/GV chưa có trong DiemTong.
+- **Phân tích lớp:** API `analyze_class_from_scores()` — đầu vào môn, mã GV, danh sách điểm CLO. CLI: `--scores-file`. Per-group `affected_students_count` thực tế.
+- **Dự đoán cá nhân:** Không bắt buộc DiemTong. `--actual-score` cho môn đã học. Fallback `create_student_record_from_ids` (kèm study_hours) khi SV/môn/GV chưa có trong DiemTong.
 - **ID:** MSSV từ nhân khẩu, mã môn từ PPGD/PPDG, GV mới dùng `__UNKNOWN__`.
+- **XAI trustworthiness:** SHAP anomaly-aware blending khi `gb_low_anomaly` kích hoạt, `calibrated` flag.
+- **Encoding:** Hash-based (`hash_v2`, mod 2^31−1), model self-validate encoding_method khi load.
+- **Robustness:** CLI input validation, data quality report, score conversion guard, dedup NaN-safe.
+- **Tính năng mới:** K-fold CV, prediction uncertainty (CI), audit log, ensemble weight setter, SHAP cache cleanup, 6 impact bands.
 
 ---
 

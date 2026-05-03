@@ -199,104 +199,103 @@ def build_academic_history_features(
     if year_column in exam_df.columns:
         exam_df[year_column] = pd.to_numeric(exam_df[year_column], errors="coerce")
 
-    # Calculate features for each student
-    student_features = []
+    # DESIGN-03: Vectorized academic-history aggregation. The previous
+    # implementation looped per student and was O(N·S) — slow on 10k+
+    # students. We now do one global sort + groupby ops.
 
-    for student_id in df[student_id_column].unique():
-        student_exams = exam_df[exam_df[student_id_column] == student_id].copy()
+    # Stable sort so tie-breakers (year, semester, Subject_ID, Lecturer_ID)
+    # match the per-student version exactly.
+    sort_cols = [student_id_column, year_column]
+    if "semester" in exam_df.columns:
+        sort_cols.append("semester")
+    for tie_col in ("Subject_ID", "Lecturer_ID"):
+        if tie_col in exam_df.columns:
+            sort_cols.append(tie_col)
+    exam_sorted = exam_df.sort_values(sort_cols, kind="mergesort").reset_index(drop=True)
 
-        if len(student_exams) == 0:
-            # No exam history for this student
-            student_features.append({
-                student_id_column: student_id,
-                "total_subjects": 0,
-                "passed_subjects": 0,
-                "pass_rate": 0.0,
-                "avg_exam_score": np.nan,
-                "median_exam_score": np.nan,
-                "min_exam_score": np.nan,
-                "recent_avg_score": np.nan,
-                "recent_median_score": np.nan,
-                "academic_core_score": np.nan,
-                "min_exam_score_adj": np.nan,
-                "improvement_trend": 0,
-            })
-            continue
+    has_semester = "semester" in exam_sorted.columns
+    recent_n = recent_semesters if has_semester else recent_semesters * 2
 
-        # Sort by time, then stable course keys (avoids arbitrary order within one year)
-        sort_cols = [year_column]
-        if "semester" in student_exams.columns:
-            sort_cols.append("semester")
-        for tie_col in ("Subject_ID", "Lecturer_ID"):
-            if tie_col in student_exams.columns:
-                sort_cols.append(tie_col)
-        student_exams = student_exams.sort_values(sort_cols, kind="mergesort")
+    grp = exam_sorted.groupby(student_id_column, sort=False)
+    total = grp["exam_score"].size()
+    passed = grp["exam_score"].apply(lambda s: int((s >= 3.0).sum()))
+    avg_score = grp["exam_score"].mean()
+    median_score = grp["exam_score"].median()
+    min_score = grp["exam_score"].min()
 
-        # Basic statistics
-        total_subjects = len(student_exams)
-        passed_subjects = (student_exams["exam_score"] >= 3.0).sum()  # Pass threshold: 3.0 (equivalent to 5.0 in 10-point)
-        pass_rate = passed_subjects / total_subjects if total_subjects > 0 else 0.0
-        avg_exam_score = student_exams["exam_score"].mean()
-        median_exam_score = student_exams["exam_score"].median()
-        min_exam_score = student_exams["exam_score"].min()
+    # Recent slice: tail(recent_n) per student.
+    # Use cumcount from the END of each group to mark the last N rows.
+    rev_idx = grp.cumcount(ascending=False)
+    recent_mask = rev_idx < recent_n
+    recent_df = exam_sorted[recent_mask]
+    recent_grp = recent_df.groupby(student_id_column, sort=False)["exam_score"]
+    recent_avg = recent_grp.mean()
+    recent_median = recent_grp.median()
 
-        # Recent average (last N semesters or years)
-        if "semester" in student_exams.columns:
-            # Use semester-based
-            recent_exams = student_exams.tail(recent_semesters)
-        else:
-            # Use year-based (assume 2 semesters per year)
-            recent_exams = student_exams.tail(recent_semesters * 2)
-        recent_avg_score = recent_exams["exam_score"].mean() if len(recent_exams) > 0 else np.nan
-        recent_median_score = recent_exams["exam_score"].median() if len(recent_exams) > 0 else np.nan
+    # Older slice: everything except the last recent_n rows, but only when
+    # the student has ≥4 total exams (matches the original guard).
+    older_mask = (~recent_mask) & (exam_sorted[student_id_column].map(total) >= 4)
+    older_df = exam_sorted[older_mask]
+    older_avg = older_df.groupby(student_id_column, sort=False)["exam_score"].mean()
 
-        core_parts = [
-            x for x in (median_exam_score, recent_avg_score, recent_median_score) if pd.notna(x)
-        ]
-        academic_core_score = float(np.mean(core_parts)) if core_parts else np.nan
+    features_df = pd.DataFrame({
+        "total_subjects": total,
+        "passed_subjects": passed,
+        "avg_exam_score": avg_score,
+        "median_exam_score": median_score,
+        "min_exam_score": min_score,
+        "recent_avg_score": recent_avg,
+        "recent_median_score": recent_median,
+        "_older_avg": older_avg,
+    }).reset_index()
 
-        # Một môn điểm cực thấp không nên “neo” toàn bộ dự đoán môn mới khi nền trung vị/gần đây cao hơn
-        floor_refs = [x for x in (median_exam_score, recent_median_score, recent_avg_score) if pd.notna(x)]
-        if total_subjects >= 4 and floor_refs and pd.notna(min_exam_score):
-            floor_ref = float(np.median(floor_refs))
-            min_exam_score_adj = float(max(float(min_exam_score), floor_ref - 1.0))
-        else:
-            min_exam_score_adj = float(min_exam_score) if pd.notna(min_exam_score) else np.nan
+    features_df["pass_rate"] = np.where(
+        features_df["total_subjects"] > 0,
+        features_df["passed_subjects"] / features_df["total_subjects"].clip(lower=1),
+        0.0,
+    )
 
-        recent_n = recent_semesters if "semester" in student_exams.columns else recent_semesters * 2
+    # academic_core_score = mean of (median, recent_avg, recent_median),
+    # ignoring NaNs. Same semantics as the per-student version.
+    core_cols = features_df[["median_exam_score", "recent_avg_score", "recent_median_score"]]
+    features_df["academic_core_score"] = core_cols.mean(axis=1, skipna=True)
 
-        # Improvement trend: compare recent vs older performance
-        if len(student_exams) >= 4:  # Need at least 4 records
-            older_exams = student_exams.head(max(0, len(student_exams) - recent_n))
-            older_avg = older_exams["exam_score"].mean()
-            if pd.notna(recent_avg_score) and pd.notna(older_avg):
-                if recent_avg_score > older_avg + 0.1:  # Threshold for improvement
-                    improvement_trend = 1  # Improving
-                elif recent_avg_score < older_avg - 0.1:  # Threshold for decline
-                    improvement_trend = -1  # Declining
-                else:
-                    improvement_trend = 0  # Stable
-            else:
-                improvement_trend = 0
-        else:
-            improvement_trend = 0  # Not enough data
+    # min_exam_score_adj: floor the raw min by median(median, recent_median,
+    # recent_avg) - 1.0, but only for students with ≥4 subjects.
+    floor_cols = features_df[["median_exam_score", "recent_median_score", "recent_avg_score"]]
+    floor_ref = floor_cols.median(axis=1, skipna=True)
+    can_adjust = (features_df["total_subjects"] >= 4) & floor_ref.notna() & features_df["min_exam_score"].notna()
+    adj_min = np.maximum(features_df["min_exam_score"], floor_ref - 1.0)
+    features_df["min_exam_score_adj"] = np.where(
+        can_adjust,
+        adj_min,
+        features_df["min_exam_score"],
+    )
 
-        student_features.append({
-            student_id_column: student_id,
-            "total_subjects": total_subjects,
-            "passed_subjects": passed_subjects,
-            "pass_rate": pass_rate,
-            "avg_exam_score": avg_exam_score,
-            "median_exam_score": median_exam_score,
-            "min_exam_score": float(min_exam_score) if pd.notna(min_exam_score) else np.nan,
-            "recent_avg_score": recent_avg_score,
-            "recent_median_score": recent_median_score,
-            "academic_core_score": academic_core_score,
-            "min_exam_score_adj": min_exam_score_adj,
-            "improvement_trend": improvement_trend,
-        })
+    # improvement_trend: requires ≥4 total subjects AND non-NaN recent + older avg.
+    diff = features_df["recent_avg_score"] - features_df["_older_avg"]
+    trend = np.zeros(len(features_df), dtype=int)
+    eligible = (features_df["total_subjects"] >= 4) & features_df["recent_avg_score"].notna() & features_df["_older_avg"].notna()
+    trend = np.where(eligible & (diff > 0.1), 1, trend)
+    trend = np.where(eligible & (diff < -0.1), -1, trend)
+    features_df["improvement_trend"] = trend
+    features_df = features_df.drop(columns=["_older_avg"])
 
-    features_df = pd.DataFrame(student_features)
+    # Reorder columns to match the original output exactly.
+    features_df = features_df[[
+        student_id_column,
+        "total_subjects",
+        "passed_subjects",
+        "pass_rate",
+        "avg_exam_score",
+        "median_exam_score",
+        "min_exam_score",
+        "recent_avg_score",
+        "recent_median_score",
+        "academic_core_score",
+        "min_exam_score_adj",
+        "improvement_trend",
+    ]]
 
     # Merge back to main DataFrame
     df = df.merge(

@@ -60,8 +60,12 @@ def generate_reasons(
             reason_text, impact_percentage, data_source=data_source
         )
 
+        # DESIGN-05: Emit both `group_name` (legacy) and `reason_key` (schema
+        # name) so callers can use either consistently. `reason_key` is the
+        # canonical name and matches the dataclass field.
         reason_dict: Dict[str, any] = {
             "group_name": group_name,
+            "reason_key": group_name,
             "reason_text": formatted_reason,
             "impact_percentage": round(impact_percentage, 2),
             "shap_value": round(float(shap_value), 4),

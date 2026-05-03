@@ -13,7 +13,7 @@ from typing import Dict, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import GroupShuffleSplit, train_test_split
+from sklearn.model_selection import GroupKFold, GroupShuffleSplit, KFold, train_test_split
 
 from ml_clo.config.model_config import TRAINING_CONFIG
 from ml_clo.data.encoders import encode_assessment_methods, encode_teaching_methods
@@ -29,6 +29,7 @@ from ml_clo.data.loaders import (
 from ml_clo.data.mergers import create_training_dataset
 from ml_clo.data.preprocessors import preprocess_exam_scores
 from ml_clo.features.feature_builder import build_all_features
+from ml_clo.features.feature_encoder import prepare_features as shared_prepare_features
 from ml_clo.models.ensemble_model import EnsembleModel
 from ml_clo.models.model_evaluator import (
     evaluate_by_score_range,
@@ -186,6 +187,65 @@ class TrainingPipeline:
 
         return training_df
 
+    def report_data_quality(self, training_df: pd.DataFrame) -> Dict[str, object]:
+        """MISSING-04: Emit a data-quality snapshot before feature encoding.
+
+        Logs row count, target stats, missing-value rate per column, and
+        duplicate keys. Returns the same info as a dict so callers can
+        persist it alongside training metrics.
+        """
+        target = "exam_score"
+        n_rows = len(training_df)
+        n_missing_target = (
+            int(training_df[target].isna().sum()) if target in training_df.columns else n_rows
+        )
+        missing_rate = training_df.isna().mean().sort_values(ascending=False)
+        high_missing = {c: float(r) for c, r in missing_rate.items() if r > 0.30}
+
+        dup_keys = 0
+        if {"Student_ID", "Subject_ID", "year"}.issubset(training_df.columns):
+            dup_keys = int(
+                training_df.duplicated(subset=["Student_ID", "Subject_ID", "year"]).sum()
+            )
+
+        target_stats: Dict[str, float] = {}
+        if target in training_df.columns:
+            valid = training_df[target].dropna()
+            if len(valid) > 0:
+                target_stats = {
+                    "min": float(valid.min()),
+                    "max": float(valid.max()),
+                    "mean": float(valid.mean()),
+                    "std": float(valid.std()),
+                }
+
+        report = {
+            "rows": n_rows,
+            "missing_target": n_missing_target,
+            "duplicate_student_subject_year": dup_keys,
+            "high_missing_columns": high_missing,
+            "target_stats": target_stats,
+        }
+
+        logger.info(f"Data quality: rows={n_rows}, missing_target={n_missing_target}")
+        if dup_keys > 0:
+            logger.warning(
+                f"Data quality: {dup_keys} duplicate (Student_ID, Subject_ID, year) keys"
+            )
+        if high_missing:
+            logger.warning(
+                f"Data quality: {len(high_missing)} columns with >30% missing: "
+                f"{list(high_missing.items())[:5]}"
+            )
+        if target_stats:
+            logger.info(
+                f"Data quality: target {target} "
+                f"min={target_stats['min']:.2f}, max={target_stats['max']:.2f}, "
+                f"mean={target_stats['mean']:.2f}, std={target_stats['std']:.2f}"
+            )
+
+        return report
+
     def prepare_features(
         self,
         training_df: pd.DataFrame,
@@ -200,55 +260,17 @@ class TrainingPipeline:
         """
         logger.info("Preparing features for training")
 
-        # Select features (exclude target and ID columns)
-        exclude_cols = [
-            "Student_ID",
-            "Subject_ID",
-            "Lecturer_ID",
-            "exam_score",
-            "year",
-        ]
-        feature_cols = [col for col in training_df.columns if col not in exclude_cols]
-
-        # Điểm min thô dễ kéo cây theo một môn lệch; mô hình dùng min_exam_score_adj (+ academic_core).
-        feature_cols = [c for c in feature_cols if c != "min_exam_score"]
-
-        # Remove columns with all NaN
-        feature_cols = [col for col in feature_cols if training_df[col].notna().sum() > 0]
-
-        # Prepare X and y
-        X = training_df[feature_cols].copy()
-        y = training_df["exam_score"].copy()
-
-        # Encode categorical columns
-        for col in X.columns:
-            if X[col].dtype == "object" or X[col].dtype.name == "category":
-                # Deterministic encoding so train/predict stay consistent.
-                X[col] = X[col].map(lambda v: stable_hash_int(v))
-            elif X[col].dtype in [np.int64, np.float64]:
-                X[col] = X[col].fillna(X[col].median())
-            else:
-                try:
-                    X[col] = pd.to_numeric(X[col], errors="coerce")
-                    X[col] = X[col].fillna(X[col].median())
-                except Exception:
-                    # Fallback: treat as categorical and hash it.
-                    X[col] = X[col].map(lambda v: stable_hash_int(v))
-
-        # Final check: fill any remaining NaN
-        X = X.apply(pd.to_numeric, errors="coerce")
-        X = X.fillna(0)
-
-        nan_count = X.isna().sum().sum()
-        if nan_count > 0:
-            logger.warning(f"{nan_count} NaN values still present, filling with 0")
-            X = X.fillna(0)
-
-        self.feature_names = list(X.columns)
+        # DESIGN-02: Single source of truth for feature selection + encoding.
+        X, y, feature_cols = shared_prepare_features(
+            training_df,
+            feature_names=None,
+            target_column="exam_score",
+        )
+        self.feature_names = feature_cols
 
         logger.info(
             f"Features prepared: {len(self.feature_names)} features, "
-            f"{len(X)} samples, NaN count: {X.isna().sum().sum()}"
+            f"{len(X)} samples"
         )
 
         return X, y, self.feature_names
@@ -405,6 +427,82 @@ class TrainingPipeline:
         )
 
         return metrics
+
+    def cross_validate(
+        self,
+        X: pd.DataFrame,
+        y: pd.Series,
+        n_splits: int = 5,
+        groups: Optional[pd.Series] = None,
+    ) -> Dict[str, float]:
+        """MISSING-02: K-fold cross-validation over the ensemble.
+
+        Trains a fresh `EnsembleModel` on each fold and aggregates test-fold
+        MAE/RMSE/R². Uses `GroupKFold(Student_ID)` when groups are supplied
+        and `group_split_by_student=True`, so a student never appears in both
+        train and test of the same fold (mirrors the leakage protection in
+        `split_data`).
+
+        Args:
+            X: Feature matrix (already encoded by prepare_features)
+            y: Target vector
+            n_splits: Number of folds (default: 5)
+            groups: Per-row group identifier (e.g. Student_ID); required for
+                grouped CV.
+
+        Returns:
+            Dict with mean and std of fold metrics:
+            ``cv_mae_mean``, ``cv_mae_std``, ``cv_rmse_mean``, ``cv_rmse_std``,
+            ``cv_r2_mean``, ``cv_r2_std``, ``cv_n_splits``.
+        """
+        if n_splits < 2:
+            raise ValueError(f"n_splits must be >= 2, got {n_splits}")
+
+        use_groups = groups is not None and self.group_split_by_student
+        if use_groups:
+            logger.info(f"Cross-validating with GroupKFold (k={n_splits}, by Student_ID)")
+            splitter = GroupKFold(n_splits=n_splits)
+            split_iter = splitter.split(X, y, groups=groups)
+        else:
+            logger.info(f"Cross-validating with KFold (k={n_splits})")
+            splitter = KFold(
+                n_splits=n_splits, shuffle=True, random_state=self.random_state
+            )
+            split_iter = splitter.split(X, y)
+
+        fold_maes, fold_rmses, fold_r2s = [], [], []
+        for fold_idx, (tr_idx, te_idx) in enumerate(split_iter, start=1):
+            X_tr, X_te = X.iloc[tr_idx], X.iloc[te_idx]
+            y_tr, y_te = y.iloc[tr_idx], y.iloc[te_idx]
+            X_tr = X_tr.fillna(0)
+            X_te = X_te.fillna(0)
+
+            fold_model = EnsembleModel(random_state=self.random_state)
+            fold_model.train(X_train=X_tr, y_train=y_tr, X_val=X_te, y_val=y_te)
+            preds = fold_model.predict(X_te)
+            fold_metrics = evaluate_model(y_te, preds, prefix="")
+            fold_maes.append(fold_metrics["mae"])
+            fold_rmses.append(fold_metrics["rmse"])
+            fold_r2s.append(fold_metrics["r2"])
+            logger.info(
+                f"Fold {fold_idx}/{n_splits}: MAE={fold_metrics['mae']:.4f}, "
+                f"RMSE={fold_metrics['rmse']:.4f}, R²={fold_metrics['r2']:.4f}"
+            )
+
+        result = {
+            "cv_n_splits": n_splits,
+            "cv_mae_mean": float(np.mean(fold_maes)),
+            "cv_mae_std": float(np.std(fold_maes)),
+            "cv_rmse_mean": float(np.mean(fold_rmses)),
+            "cv_rmse_std": float(np.std(fold_rmses)),
+            "cv_r2_mean": float(np.mean(fold_r2s)),
+            "cv_r2_std": float(np.std(fold_r2s)),
+        }
+        logger.info(
+            f"CV summary: MAE={result['cv_mae_mean']:.4f}±{result['cv_mae_std']:.4f}, "
+            f"R²={result['cv_r2_mean']:.4f}±{result['cv_r2_std']:.4f}"
+        )
+        return result
 
     def save_model(
         self,

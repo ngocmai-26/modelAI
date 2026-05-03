@@ -193,6 +193,19 @@ class EnsembleModel(BaseModel):
         self.is_trained = True
         self.training_timestamp = pd.Timestamp.now().isoformat()
 
+        # Persist encoding method and ensemble config snapshot with the model
+        # so predict-time behavior matches train-time behavior regardless of
+        # later changes to ENSEMBLE_CONFIG in source (NEW-02, DESIGN-10).
+        self.extra_metadata = {
+            # hash_v2: stable_hash_int uses mod = 2**31 - 1 (was 1e9 in v1)
+            # — bumped to reduce birthday-paradox collisions on
+            # high-cardinality columns.
+            "encoding_method": "hash_v2",
+            "ensemble_config": dict(self.ensemble_config),
+            "rf_config": dict(self.rf_config),
+            "gb_config": dict(self.gb_config),
+        }
+
         logger.info(
             f"Ensemble model training complete. "
             f"Train MAE: {ensemble_train_mae:.4f}, Train R²: {ensemble_train_r2:.4f}"
@@ -214,6 +227,18 @@ class EnsembleModel(BaseModel):
         """
         super().predict(X)  # Check if trained
 
+        # BUG-05: Enforce training-time column order. Sklearn predicts by
+        # positional index, so a DataFrame with the right columns in the
+        # wrong order would silently predict on the wrong features.
+        if self.feature_names is not None and isinstance(X, pd.DataFrame):
+            missing = [c for c in self.feature_names if c not in X.columns]
+            if missing:
+                raise ValueError(
+                    f"Missing required feature columns: {missing[:10]}"
+                    + ("..." if len(missing) > 10 else "")
+                )
+            X = X[self.feature_names]
+
         # Get predictions from both models
         rf_pred = self.rf_model.predict(X)
         gb_pred = self.gb_model.predict(X)
@@ -233,6 +258,80 @@ class EnsembleModel(BaseModel):
         # Weighted average; clip to CLO scale [0, 6]
         ensemble_pred = self.rf_weight * rf_pred + self.gb_weight * gb_use
         return np.clip(ensemble_pred, 0.0, 6.0)
+
+    def set_weights(self, rf_weight: float, gb_weight: float) -> None:
+        """Override ensemble weights after loading a trained model.
+
+        DESIGN-08: Allow operators to re-balance the ensemble post-hoc (e.g.
+        after observing drift in one sub-model on recent data) without
+        retraining. Weights are normalized to sum to 1 and clipped to the
+        min/max bounds from ensemble_config.
+
+        Args:
+            rf_weight: Desired Random Forest weight (>0)
+            gb_weight: Desired Gradient Boosting weight (>0)
+
+        Raises:
+            ValueError: If either weight is non-positive.
+        """
+        if rf_weight <= 0 or gb_weight <= 0:
+            raise ValueError(
+                f"Weights must be positive, got rf_weight={rf_weight}, gb_weight={gb_weight}"
+            )
+
+        min_w = float(self.ensemble_config.get("min_weight", 0.1))
+        max_w = float(self.ensemble_config.get("max_weight", 0.9))
+        rf_w = float(np.clip(rf_weight, min_w, max_w))
+        gb_w = float(np.clip(gb_weight, min_w, max_w))
+        total = rf_w + gb_w
+        self.rf_weight = rf_w / total
+        self.gb_weight = gb_w / total
+
+        if isinstance(self.model, dict):
+            self.model["rf_weight"] = self.rf_weight
+            self.model["gb_weight"] = self.gb_weight
+
+        logger.info(
+            f"Ensemble weights updated: RF={self.rf_weight:.3f}, GB={self.gb_weight:.3f}"
+        )
+
+    def predict_with_uncertainty(self, X: pd.DataFrame) -> Dict[str, np.ndarray]:
+        """MISSING-03: Predict with per-sample uncertainty estimate.
+
+        Uses the standard deviation across the Random Forest sub-estimators
+        as the uncertainty signal (a well-known cheap proxy for predictive
+        variance on tree ensembles). Gradient Boosting cannot expose
+        per-tree predictions in the same way, so its contribution is
+        treated as point-estimate-only.
+
+        Returns:
+            Dict with keys:
+              - ``prediction``: Final clipped ensemble prediction (same as
+                :meth:`predict`).
+              - ``rf_std``: Per-sample stdev across RF trees.
+              - ``confidence_interval_low`` / ``confidence_interval_high``:
+                Approximate ±2σ band around the prediction, clipped to [0,6].
+        """
+        super().predict(X)  # ensures trained
+        if self.feature_names is not None and isinstance(X, pd.DataFrame):
+            X = X[self.feature_names]
+
+        # Per-tree predictions: shape (n_trees, n_samples)
+        per_tree = np.stack(
+            [tree.predict(X) for tree in self.rf_model.estimators_], axis=0
+        )
+        rf_std = per_tree.std(axis=0)
+
+        prediction = self.predict(X)
+        ci_low = np.clip(prediction - 2.0 * rf_std, 0.0, 6.0)
+        ci_high = np.clip(prediction + 2.0 * rf_std, 0.0, 6.0)
+
+        return {
+            "prediction": prediction,
+            "rf_std": rf_std,
+            "confidence_interval_low": ci_low,
+            "confidence_interval_high": ci_high,
+        }
 
     def get_feature_importance(self) -> Optional[Dict[str, float]]:
         """Get ensemble feature importance.
@@ -277,4 +376,42 @@ class EnsembleModel(BaseModel):
             self.gb_weight = self.model.get("gb_weight", 0.5)
         else:
             raise ModelLoadError("Invalid model structure in saved file")
+
+        # NEW-02: Enforce that the model was trained with the current
+        # categorical encoding scheme. Models saved before hash encoding
+        # was introduced do not have this field and are incompatible with
+        # the current prediction pipeline.
+        encoding_method = self.extra_metadata.get("encoding_method")
+        if encoding_method is None:
+            raise ModelLoadError(
+                f"Model file {file_path} has no 'encoding_method' metadata. "
+                "It was likely trained with the legacy LabelEncoder-based "
+                "pipeline and is incompatible with the current hash-based "
+                "encoding. Please retrain the model."
+            )
+        if encoding_method not in ("hash_v2",):
+            raise ModelLoadError(
+                f"Unsupported encoding_method '{encoding_method}' in model "
+                f"{file_path}. Expected 'hash_v2'. Please retrain the model."
+            )
+
+        # DESIGN-10: Restore ensemble_config snapshot so predict() uses the
+        # same anomaly thresholds that were in effect at training time.
+        saved_ensemble_config = self.extra_metadata.get("ensemble_config")
+        if saved_ensemble_config:
+            self.ensemble_config = dict(saved_ensemble_config)
+            logger.info(
+                "Restored ensemble_config snapshot from model metadata "
+                "(gb_low_anomaly_max_gb=%s, gb_low_anomaly_min_gap=%s, "
+                "gb_low_anomaly_rf_blend=%s)",
+                self.ensemble_config.get("gb_low_anomaly_max_gb"),
+                self.ensemble_config.get("gb_low_anomaly_min_gap"),
+                self.ensemble_config.get("gb_low_anomaly_rf_blend"),
+            )
+        else:
+            logger.warning(
+                "Model file has no saved ensemble_config; predict() will use "
+                "ENSEMBLE_CONFIG from the current source, which may differ "
+                "from training-time configuration."
+            )
 

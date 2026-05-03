@@ -268,3 +268,19 @@ Ngày hoàn thành: 2026-03-10
 | 7. Test & Tài liệu | ✓ |
 
 **Kiểm tra cuối:** `pytest tests/ -v` (unit + integration)
+
+---
+
+## Bug fix round (2026-04-10)
+
+Sau triển khai feedback plan, đã phát hiện và fix 40+ issues trong 4 đợt.
+Chi tiết: xem [ISSUES.md](../ISSUES.md).
+
+Các thay đổi liên quan đến feedback plan:
+
+- **Bước 2 (Điểm danh):** `create_student_record_from_ids` giờ nhận `study_hours_df` (MISSING-07) — virtual record đầy đủ hơn
+- **Bước 4 (XAI):** SHAP anomaly-aware blending (NEW-01) — SHAP giải thích đúng khi `gb_low_anomaly` kích hoạt
+- **Bước 5 (Trùng lặp):** Hash encoding v2 (NEW-02/03) thay LabelEncoder — deterministic, không cần fit
+- **Bước 7 (Test):** 14 tests mới (`tests/unit/test_missing05.py`) cho gap coverage
+
+**Model retrained:** v1.0_20260410_162858, encoding=hash_v2, MAE=0.3945, R²=0.7980, 106 tests passed.

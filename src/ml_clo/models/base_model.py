@@ -45,6 +45,9 @@ class BaseModel(ABC):
         self.feature_names: Optional[list] = None
         self.training_metrics: Dict[str, float] = {}
         self.training_timestamp: Optional[str] = None
+        # Additional metadata persisted with the model (subclasses can populate
+        # this before calling save(), e.g. encoding_method, ensemble_config).
+        self.extra_metadata: Dict[str, Any] = {}
 
     def _generate_version(self) -> str:
         """Generate model version string.
@@ -117,6 +120,7 @@ class BaseModel(ABC):
             "feature_names": self.feature_names,
             "training_metrics": self.training_metrics,
             "training_timestamp": self.training_timestamp,
+            "extra_metadata": self.extra_metadata,
         }
 
         joblib.dump(model_data, file_path)
@@ -146,6 +150,7 @@ class BaseModel(ABC):
             self.feature_names = model_data.get("feature_names")
             self.training_metrics = model_data.get("training_metrics", {})
             self.training_timestamp = model_data.get("training_timestamp")
+            self.extra_metadata = model_data.get("extra_metadata", {}) or {}
 
             logger.info(f"Loaded model {self.model_name} (version {self.version}) from {file_path}")
         except Exception as e:

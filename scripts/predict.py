@@ -169,8 +169,23 @@ Examples:
 
 
 def validate_paths(args):
-    """Validate that input files exist and data sources are sufficient."""
+    """Validate input files, IDs, and ranges (MISSING-01)."""
     errors = []
+
+    # Identifier sanity checks — empty/whitespace IDs cause silent merge misses.
+    for name, value in (
+        ("--student-id", args.student_id),
+        ("--subject-id", args.subject_id),
+        ("--lecturer-id", args.lecturer_id),
+    ):
+        if value is None or str(value).strip() == "":
+            errors.append(f"{name} must not be empty")
+
+    # Actual CLO score must be in [0, 6] (CLO scale).
+    if args.actual_score is not None and not (0.0 <= args.actual_score <= 6.0):
+        errors.append(
+            f"--actual-score must be in [0, 6] (CLO scale), got {args.actual_score}"
+        )
 
     # Check model file
     if not Path(args.model).exists():

@@ -46,6 +46,7 @@ def create_student_record_from_ids(
     demographics_df: Optional[pd.DataFrame] = None,
     teaching_methods_df: Optional[pd.DataFrame] = None,
     assessment_methods_df: Optional[pd.DataFrame] = None,
+    study_hours_df: Optional[pd.DataFrame] = None,
     year: Optional[float] = None,
 ) -> pd.DataFrame:
     """Tạo 1 record "ảo" cho (student_id, subject_id, lecturer_id) từ nhân khẩu, PPGD/PPDG.
@@ -59,6 +60,7 @@ def create_student_record_from_ids(
         demographics_df: Nhân khẩu (nhankhau.xlsx)
         teaching_methods_df: PPGD (đã encode TM)
         assessment_methods_df: PPDG (đã encode EM)
+        study_hours_df: Tự học (tùy chọn, MISSING-07)
         year: Năm học (optional, mặc định 2024)
 
     Returns:
@@ -88,6 +90,10 @@ def create_student_record_from_ids(
 
     if assessment_methods_df is not None and "Subject_ID" in assessment_methods_df.columns:
         base = merge_assessment_methods(base, assessment_methods_df)
+
+    # MISSING-07: merge study hours so virtual records have total_study_hours
+    if study_hours_df is not None and "Student_ID" in study_hours_df.columns:
+        base = merge_study_hours(base, study_hours_df, year_column="year")
 
     # Thiếu TM/EM sẽ được prepare_features bù bằng 0 khi predict
 
@@ -202,20 +208,50 @@ def merge_demographics(
         if col in demographics_df.columns:
             demo_cols.append(col)
 
-    demographics_subset = demographics_df[demo_cols].drop_duplicates(subset=["Student_ID"])
+    # DATA-02: Keep the most recent row per Student_ID instead of the first,
+    # so updated demographic info (e.g. corrected address) overrides stale
+    # records. Log the number of duplicates collapsed.
+    dup_count = int(
+        demographics_df.duplicated(subset=["Student_ID"]).sum()
+    )
+    if dup_count > 0:
+        logger.info(
+            f"Demographics: collapsing {dup_count} duplicate Student_ID rows "
+            "(keeping last occurrence)."
+        )
+    demographics_subset = demographics_df[demo_cols].drop_duplicates(
+        subset=["Student_ID"], keep="last"
+    )
 
-    # Merge
-    merged = df.merge(
-        demographics_subset,
+    # PERF-02: Use index-based join. demographics_subset has one row per
+    # Student_ID and few columns, so set_index on the lookup side and `join`
+    # on the larger left df is cheaper than a hash merge — and avoids the
+    # implicit copy `merge` makes when reconciling key columns.
+    demographics_indexed = demographics_subset.set_index("Student_ID")
+    merged = df.join(
+        demographics_indexed,
         on="Student_ID",
         how="left",
-        suffixes=("", "_demo"),
+        rsuffix="_demo",
     )
 
-    logger.info(
-        f"Merged demographics: {len(merged)} records "
-        f"({merged[demo_cols[1] if len(demo_cols) > 1 else 'Student_ID'].notna().sum() if len(demo_cols) > 1 else len(merged)} with demographics)"
-    )
+    # BUG-06: Safely report how many rows got demographic data without
+    # assuming demo_cols[1] survived the merge suffix resolution.
+    probe_col = None
+    for col in demo_cols[1:]:
+        if col in merged.columns:
+            probe_col = col
+            break
+        if f"{col}_demo" in merged.columns:
+            probe_col = f"{col}_demo"
+            break
+    if probe_col is not None:
+        matched = int(merged[probe_col].notna().sum())
+        logger.info(
+            f"Merged demographics: {len(merged)} records ({matched} with demographics)"
+        )
+    else:
+        logger.info(f"Merged demographics: {len(merged)} records (no demo columns)")
 
     return merged
 
@@ -250,12 +286,12 @@ def merge_teaching_methods(
 
     teaching_subset = teaching_methods_df[tm_cols].drop_duplicates(subset=["Subject_ID"])
 
-    # Merge
-    merged = df.merge(
-        teaching_subset,
+    # PERF-02: index-based join (one row per Subject_ID lookup table)
+    merged = df.join(
+        teaching_subset.set_index("Subject_ID"),
         on="Subject_ID",
         how="left",
-        suffixes=("", "_tm"),
+        rsuffix="_tm",
     )
 
     tm_cols_count = len([col for col in tm_cols if col != "Subject_ID"])
@@ -297,12 +333,12 @@ def merge_assessment_methods(
 
     assessment_subset = assessment_methods_df[em_cols].drop_duplicates(subset=["Subject_ID"])
 
-    # Merge
-    merged = df.merge(
-        assessment_subset,
+    # PERF-02: index-based join (one row per Subject_ID lookup table)
+    merged = df.join(
+        assessment_subset.set_index("Subject_ID"),
         on="Subject_ID",
         how="left",
-        suffixes=("", "_em"),
+        rsuffix="_em",
     )
 
     em_cols_count = len([col for col in em_cols if col != "Subject_ID"])
@@ -463,13 +499,29 @@ def merge_attendance(
     # Calculate attendance rate
     # Map attendance status to numeric: Sớm/Có = 1, Trễ = 0.5, Vắng/Phép = 0
     if "Điểm danh" in attendance_df.columns:
-        attendance_df["attendance_status"] = attendance_df["Điểm danh"].map({
+        status_map = {
             "Sớm": 1.0,
             "Có": 1.0,
             "Trễ": 0.5,
             "Vắng": 0.0,
             "Phép": 0.0,
-        }).fillna(0.0)
+        }
+        # Normalize whitespace/case before mapping so "có ", "VẮNG" still match.
+        normalized = (
+            attendance_df["Điểm danh"].astype(str).str.strip()
+        )
+        mapped = normalized.map(status_map)
+
+        # DATA-01: Log unknown values (typos, unexpected labels) so they
+        # don't silently become "Vắng" (0.0) and deflate attendance_rate.
+        unknown_mask = mapped.isna() & normalized.notna() & (normalized != "nan")
+        if unknown_mask.any():
+            bad_values = normalized[unknown_mask].value_counts().head(10).to_dict()
+            logger.warning(
+                f"Attendance: {int(unknown_mask.sum())} rows have unrecognized "
+                f"'Điểm danh' values (treated as absent). Top values: {bad_values}"
+            )
+        attendance_df["attendance_status"] = mapped.fillna(0.0)
 
         if use_subject_in_merge:
             # Aggregate by Student_ID, Subject_ID, year (có Mã môn học)
@@ -584,9 +636,13 @@ def merge_all_data_sources(
     if assessment_methods_df is not None:
         merged = merge_assessment_methods(merged, assessment_methods_df)
 
-    # Merge study hours
-    if study_hours_df is not None:
-        merged = merge_study_hours(merged, study_hours_df, year_column=year_column)
+    # NOTE: Study hours are intentionally NOT merged here.
+    # build_study_hours_features() (called later by the pipelines) produces
+    # the authoritative `total_study_hours` (per-student) and
+    # `study_hours_this_year` columns. Merging here would create a
+    # per-year `total_study_hours` that later collides with the per-student
+    # version via the `_total` suffix, causing the model to train on the
+    # wrong column semantics (see BUG-01).
 
     # Merge attendance
     if attendance_df is not None:

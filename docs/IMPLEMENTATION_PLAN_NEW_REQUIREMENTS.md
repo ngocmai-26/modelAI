@@ -266,3 +266,24 @@ Hoặc đơn giản (chỉ điểm):
 ```json
 {"scores": [4.2, 3.8, 5.1]}
 ```
+
+---
+
+## Phụ lục: Bug fix round (2026-04-10)
+
+Sau khi triển khai xong các bước 0–5, đã thực hiện 4 đợt fix toàn bộ lỗi phát sinh (40+ items, xem [ISSUES.md](../ISSUES.md)):
+
+| Đợt | Focus | Items chính |
+| --- | --- | --- |
+| 1 | Correctness (HIGH) | BUG-01..06, NEW-02/03, DESIGN-01/10 |
+| 2 | XAI Trustworthiness | NEW-01 (anomaly SHAP), NEW-04/05, DESIGN-05/06 |
+| 3 | Robustness | DATA-01/03/07, dedup NaN-safe |
+| 4 | Design + PERF + MISSING | Shared feature_encoder, vectorized features, impact bands, set_weights, predict_with_uncertainty, k-fold CV, data quality report, audit log, CLI validation, study_hours passthrough, SHAP clear_cache, index-based merges |
+
+**Kết quả:** 37/41 fixed (4 LOW severity accepted), 106 tests passed, model MAE=0.3945 R²=0.7980.
+
+**Files mới:**
+
+- `src/ml_clo/features/feature_encoder.py` — shared feature preparation (thay thế 3 bản copy)
+- `src/ml_clo/utils/audit_log.py` — JSONL prediction audit trail
+- `tests/unit/test_missing05.py` — 14 tests cho các gap coverage

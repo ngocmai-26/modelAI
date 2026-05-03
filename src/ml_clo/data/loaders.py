@@ -304,6 +304,52 @@ def load_study_hours(file_path: str) -> pd.DataFrame:
             df["accumulated_study_hours"], errors="coerce"
         )
 
+    # DATA-03: If the file uses a `time` column in HH:MM format instead of
+    # `accumulated_study_hours`, convert it to decimal hours so downstream
+    # `build_study_hours_features` does not raise KeyError.
+    has_hours = "accumulated_study_hours" in df.columns and df[
+        "accumulated_study_hours"
+    ].notna().any()
+    if not has_hours:
+        if "accumulated_study_minutes" in df.columns:
+            mins = pd.to_numeric(df["accumulated_study_minutes"], errors="coerce")
+            df["accumulated_study_hours"] = mins / 60.0
+            logger.info(
+                "Derived 'accumulated_study_hours' from 'accumulated_study_minutes'."
+            )
+        elif "time" in df.columns:
+            def _hhmm_to_hours(val):
+                if val is None or pd.isna(val):
+                    return float("nan")
+                s = str(val).strip()
+                if not s or s.lower() == "nan":
+                    return float("nan")
+                # Accept HH:MM, HH:MM:SS, or plain numeric
+                try:
+                    if ":" in s:
+                        parts = s.split(":")
+                        h = float(parts[0])
+                        m = float(parts[1]) if len(parts) > 1 else 0.0
+                        sec = float(parts[2]) if len(parts) > 2 else 0.0
+                        return h + m / 60.0 + sec / 3600.0
+                    return float(s)
+                except (ValueError, IndexError):
+                    return float("nan")
+
+            df["accumulated_study_hours"] = df["time"].map(_hhmm_to_hours)
+            valid = int(df["accumulated_study_hours"].notna().sum())
+            logger.info(
+                f"Derived 'accumulated_study_hours' from 'time' (HH:MM): "
+                f"{valid}/{len(df)} valid rows."
+            )
+        else:
+            logger.warning(
+                "Study hours file has no 'accumulated_study_hours', "
+                "'accumulated_study_minutes', or 'time' column — "
+                "downstream feature building will treat hours as missing."
+            )
+            df["accumulated_study_hours"] = float("nan")
+
     logger.info(f"Successfully loaded study hours: {len(df)} records")
     return df
 
