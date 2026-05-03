@@ -225,10 +225,16 @@ class AnalysisPipeline:
         # accepted for backward compatibility but no longer used (hash encoding
         # is stateless and consistent across train/predict/analyze).
         del label_encoders  # explicitly mark as unused
-        X, _, _ = shared_prepare_features(
+        strategy = getattr(self.model, "categorical_strategy", "hash") if self.model else "hash"
+        encoders = getattr(self.model, "fitted_encoders", None) if self.model else None
+        X, _, _, _ = shared_prepare_features(
             class_df,
             feature_names=self.feature_names,
             target_column="exam_score",
+            categorical_strategy=strategy,
+            include_id_features=(strategy != "hash"),
+            fitted_encoders=encoders,
+            fit=False,
         )
 
         logger.info(f"Features prepared: {X.shape}")

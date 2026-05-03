@@ -389,11 +389,20 @@ class EnsembleModel(BaseModel):
                 "pipeline and is incompatible with the current hash-based "
                 "encoding. Please retrain the model."
             )
-        if encoding_method not in ("hash_v2",):
+        if encoding_method not in ("hash_v2", "frequency_v1", "target_v1"):
             raise ModelLoadError(
                 f"Unsupported encoding_method '{encoding_method}' in model "
-                f"{file_path}. Expected 'hash_v2'. Please retrain the model."
+                f"{file_path}. Expected 'hash_v2', 'frequency_v1', or "
+                f"'target_v1'. Please retrain the model."
             )
+
+        # Restore fitted categorical encoders + strategy so predict-time
+        # encoding matches train-time. ``categorical_strategy`` defaults to
+        # the legacy hash for backward-compat with older artifacts.
+        self.categorical_strategy = self.extra_metadata.get(
+            "categorical_strategy", "hash"
+        )
+        self.fitted_encoders = self.extra_metadata.get("fitted_encoders") or {}
 
         # DESIGN-10: Restore ensemble_config snapshot so predict() uses the
         # same anomaly thresholds that were in effect at training time.
