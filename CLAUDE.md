@@ -12,7 +12,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Rule-based reason/solution generation in Vietnamese (no LLM), 6 impact bands
 - Three pipelines: `TrainingPipeline` (k-fold CV, data quality report), `PredictionPipeline` (audit log), `AnalysisPipeline` (per-group affected count)
 - Prediction uncertainty via RF per-tree variance (`predict_with_uncertainty`)
-- Deterministic hash encoding (`stable_hash_int`, hash_v2, mod 2^31-1) — models self-validate encoding on load
+- Three categorical encoding strategies: `hash` (default, `stable_hash_int`, hash_v2, mod 2^31-1), `frequency`, `target` (5-fold mean with smoothing) — model artifact stores `encoding_method` + `fitted_encoders`, validated on load
+- Optional survey integration (`survey_path`) and temporal attendance features (`enable_temporal_features`) — disabled by default, enabled per-experiment
 
 ## Environment Setup
 
@@ -67,8 +68,19 @@ All scripts require `PYTHONPATH` to include `src/` or the package installed:
 ```bash
 export PYTHONPATH="${PYTHONPATH}:$(pwd)/src"
 
-# Train
-python scripts/train.py --exam-scores data/DiemTong.xlsx --output models/model.joblib
+# Train (full dataset, baseline encoding)
+python scripts/train.py \
+  --exam-scores data/DiemTong.xlsx \
+  --output models/model.joblib \
+  --conduct-scores data/diemrenluyen.xlsx \
+  --demographics data/nhankhau.xlsx \
+  --teaching-methods data/PPGDfull.xlsx \
+  --assessment-methods data/PPDGfull.xlsx \
+  --study-hours data/tuhoc.xlsx \
+  --attendance "data/Dữ liệu điểm danh Khoa FIRA.xlsx"
+
+# Optional: include survey responses (advisor feedback ablation)
+#   --survey "data/Khảo sát các yếu tố cá nhân...xlsx"
 
 # Predict (exam-scores is optional; demographics + PPGD + PPDG are sufficient)
 python scripts/predict.py \
@@ -83,6 +95,11 @@ python scripts/analyze_class.py \
   --model models/model.joblib \
   --subject-id INF0823 --lecturer-id 90316 \
   --scores-file data/clo_scores.csv --output result.json
+
+# Ablation studies (advisor feedback validation)
+python scripts/run_ablation_survey.py     # LMS vs LMS+Survey
+python scripts/run_ablation_temporal.py   # +slope/volatility/late_streak
+python scripts/run_ablation_encoding.py   # hash vs frequency vs target
 ```
 
 ## Architecture
@@ -91,10 +108,16 @@ python scripts/analyze_class.py \
 src/ml_clo/
 ├── pipelines/          # TrainingPipeline (cross_validate, report_data_quality),
 │                       #   PredictionPipeline (audit log), AnalysisPipeline (affected_students_count)
-├── data/               # loaders.py, preprocessors.py, encoders.py, validators.py, mergers.py
-├── features/           # feature_builder.py, feature_groups.py, feature_encoder.py (shared prepare)
+├── data/               # loaders.py (load_survey_responses), preprocessors.py, encoders.py,
+│                       #   validators.py, mergers.py (merge_survey_responses),
+│                       #   survey_preprocessor.py (Likert/multi-hot/range encoding)
+├── features/           # feature_builder.py (attendance_history_df hook), feature_groups.py,
+│                       #   feature_encoder.py (categorical_strategy, include_id_features),
+│                       #   temporal_features.py (slope/volatility per student-year),
+│                       #   categorical_encoder.py (FrequencyEncoder, TargetEncoder)
 ├── models/             # base_model.py (extra_metadata), ensemble_model.py (set_weights,
-│                       #   predict_with_uncertainty, gb_low_anomaly), model_evaluator.py
+│                       #   predict_with_uncertainty, gb_low_anomaly, fitted_encoders),
+│                       #   model_evaluator.py
 ├── xai/                # shap_explainer.py (anomaly-aware, clear_cache), shap_postprocess.py
 ├── reasoning/          # reason_generator.py, solution_mapper.py, templates.py (IMPACT_BANDS)
 ├── outputs/            # schemas.py (IndividualAnalysisOutput, ClassAnalysisOutput, calibrated)
@@ -104,10 +127,10 @@ src/ml_clo/
 ```
 
 **Data flow:**
-1. `data/` modules load Excel files and normalize column names
-2. `features/feature_encoder.py` (shared) selects columns, applies `stable_hash_int` to categoricals
-3. `features/feature_builder.py` computes aggregate features (conduct trends, pass rates, etc.) via vectorized groupby
-4. `models/ensemble_model.py` trains weighted RF + GB ensemble with `gb_low_anomaly` blending, saves as `.joblib` with `extra_metadata` (encoding_method, ensemble_config snapshot)
+1. `data/` modules load Excel files and normalize column names; `survey_preprocessor.py` encodes the 42-column raw survey into ~30 ordinal/multi-hot features
+2. `features/feature_encoder.py` (shared) selects columns and applies the chosen `categorical_strategy` (hash by default; target/frequency for ID columns when `include_id_features=True`)
+3. `features/feature_builder.py` computes aggregate features (conduct trends, pass rates, etc.) via vectorized groupby; optional `temporal_features.py` derives per-(student, year) attendance slope/volatility/late-streak
+4. `models/ensemble_model.py` trains weighted RF + GB ensemble with `gb_low_anomaly` blending, saves as `.joblib` with `extra_metadata` (encoding_method, fitted_encoders, ensemble_config snapshot)
 5. `xai/shap_explainer.py` computes anomaly-aware SHAP values (effective weights match prediction blending); `shap_postprocess.py` groups into 7 pedagogical categories: Tự học, Chuyên cần, Rèn luyện, Học lực, Giảng dạy, Đánh giá, Cá nhân
 6. `reasoning/` maps SHAP groups → Vietnamese reason text (6 impact bands) + actionable solutions (rule-based, calibrated against raw feature values)
 7. `outputs/schemas.py` serializes to `IndividualAnalysisOutput` or `ClassAnalysisOutput` (with `calibrated` flag, `affected_students_count`)
@@ -115,11 +138,12 @@ src/ml_clo/
 **Key design decisions:**
 - All training data uses CLO scale (0–6). Exam scores in hệ 10 are converted: `CLO_6 = Score_10 / 10 × 6` (guarded: skip if max ≤ 6)
 - Model is not bundled — backends receive the `.joblib` path via `model_path` parameter
-- Models self-validate `encoding_method` on load — incompatible models are rejected with clear retrain message
+- Models self-validate `encoding_method` on load (`hash_v2`, `frequency_v1`, `target_v1`) — incompatible models are rejected with clear retrain message
 - `analyze_class_from_scores()` is the primary class analysis API; the older `--exam-scores` filter is deprecated
 - `--exam-scores` is optional for prediction; fallback uses `create_student_record_from_ids` (with study_hours) when student/subject/lecturer not in DiemTong
 - `predict_with_uncertainty()` provides RF per-tree stdev as confidence proxy
 - Prediction audit trail via `utils/audit_log.py` (opt-in JSONL)
+- **Empirically validated** baseline (76 features, hash encoding, no survey, no temporal) — see [docs/EXPERIMENTS_LOG.md](docs/EXPERIMENTS_LOG.md). Survey, temporal, and structured ID encoding were tested via ablation and found to NOT improve MAE on current data coverage.
 
 ## Data Files
 
@@ -129,8 +153,9 @@ Place Excel files in `data/`. Expected files:
 - `PPGDfull.xlsx` — teaching methods
 - `PPDGfull.xlsx` — assessment methods
 - `diemrenluyen.xlsx` — conduct scores
-- `tuhoc.xlsx` — self-study hours
-- `Dữ liệu điểm danh Khoa FIRA.xlsx` — attendance data
+- `tuhoc.xlsx` — self-study hours (granularity: year + semester only — no weekly timestamps)
+- `Dữ liệu điểm danh Khoa FIRA.xlsx` — attendance data (covers ~28% of records)
+- `Khảo sát các yếu tố cá nhân...xlsx` — student survey (280 responses; only 76 MSSVs overlap exam scores; ablation found NOT to improve model)
 
 ## Testing
 

@@ -1,0 +1,218 @@
+{
+  "baseline_v0_pre_advisor": {
+    "scenario": "Pre-advisor baseline (current pipeline, no changes)",
+    "model_path": "models/baseline_v0_pre_advisor.joblib",
+    "model_version": "v1.0_20260503_171230",
+    "data_sources": [
+      "DiemTong.xlsx",
+      "diemrenluyen.xlsx",
+      "nhankhau.xlsx",
+      "PPGDfull.xlsx",
+      "PPDGfull.xlsx",
+      "tuhoc.xlsx",
+      "Dữ liệu điểm danh Khoa FIRA.xlsx"
+    ],
+    "encoding": "hash_v2",
+    "n_features": 76,
+    "n_samples": 16133,
+    "n_train": 10285,
+    "n_val": 2490,
+    "n_test": 3358,
+    "metrics": {
+      "test_mae": 0.3945,
+      "test_rmse": 0.5748,
+      "test_r2": 0.798,
+      "val_mae": 0.3691,
+      "val_rmse": 0.5408,
+      "val_r2": 0.8214,
+      "train_mae": 0.1484,
+      "train_rmse": 0.2157,
+      "train_r2": 0.97
+    },
+    "ensemble_weights": {
+      "rf": 0.424,
+      "gb": 0.576
+    }
+  },
+  "ablation_survey": {
+    "baseline_lms": {
+      "scenario": "baseline_lms",
+      "description": "LMS/SIS only (no survey)",
+      "model_path": "/Users/thuan.nguyen.trong/Desktop/workspace/thuannt/modelAI/models/ablation_baseline_lms.joblib",
+      "model_version": "v1.0_20260503_172214",
+      "n_features": 76,
+      "metrics": {
+        "test_mae": 0.3944702090545577,
+        "test_rmse": 0.5748072534490358,
+        "test_r2": 0.7979563549476992,
+        "val_mae": 0.3691151151676534,
+        "val_rmse": 0.5407848059082759,
+        "val_r2": 0.8214276811777311,
+        "train_mae": 0.14835082329570712,
+        "train_rmse": 0.21573006418476823,
+        "train_r2": 0.9699718240349108
+      },
+      "ensemble_weights": {
+        "rf": 0.4241752553240971,
+        "gb": 0.5758247446759029
+      }
+    },
+    "extended_survey": {
+      "scenario": "extended_survey",
+      "description": "LMS/SIS + survey responses",
+      "model_path": "/Users/thuan.nguyen.trong/Desktop/workspace/thuannt/modelAI/models/ablation_extended_survey.joblib",
+      "model_version": "v1.0_20260503_172316",
+      "n_features": 119,
+      "metrics": {
+        "test_mae": 0.39539666744035834,
+        "test_rmse": 0.5764470980678112,
+        "test_r2": 0.7968019060879973,
+        "val_mae": 0.3682429320925271,
+        "val_rmse": 0.5393197063136799,
+        "val_r2": 0.8223939503068135,
+        "train_mae": 0.14930367363630342,
+        "train_rmse": 0.2168077374647486,
+        "train_r2": 0.9696710649252941
+      },
+      "ensemble_weights": {
+        "rf": 0.4238865819904299,
+        "gb": 0.5761134180095702
+      }
+    },
+    "delta": {
+      "mae_delta": 0.0009264583858006326,
+      "rmse_delta": 0.0016398446187754212,
+      "r2_delta": -0.0011544488597019509,
+      "interpretation": "Survey does NOT improve model"
+    }
+  },
+  "ablation_temporal": {
+    "no_temporal": {
+      "scenario": "no_temporal",
+      "description": "Aggregate attendance only (no per-week temporal features)",
+      "enable_temporal_features": false,
+      "model_path": "/Users/thuan.nguyen.trong/Desktop/workspace/thuannt/modelAI/models/ablation_no_temporal.joblib",
+      "model_version": "v1.0_20260503_172752",
+      "n_features": 76,
+      "metrics": {
+        "test_mae": 0.3944702090545577,
+        "test_rmse": 0.5748072534490358,
+        "test_r2": 0.7979563549476992,
+        "val_mae": 0.3691151151676534,
+        "val_rmse": 0.5407848059082759,
+        "val_r2": 0.8214276811777311,
+        "train_mae": 0.1483508232957071,
+        "train_rmse": 0.21573006418476823,
+        "train_r2": 0.9699718240349108
+      },
+      "ensemble_weights": {
+        "rf": 0.4241752553240971,
+        "gb": 0.5758247446759029
+      }
+    },
+    "with_temporal": {
+      "scenario": "with_temporal",
+      "description": "+ slope/volatility/late_streak/early_dropoff per (student, year)",
+      "enable_temporal_features": true,
+      "model_path": "/Users/thuan.nguyen.trong/Desktop/workspace/thuannt/modelAI/models/ablation_with_temporal.joblib",
+      "model_version": "v1.0_20260503_172852",
+      "n_features": 82,
+      "metrics": {
+        "test_mae": 0.3959407941193283,
+        "test_rmse": 0.5761516019396429,
+        "test_r2": 0.7970101779671529,
+        "val_mae": 0.36933045772453454,
+        "val_rmse": 0.5416942786943743,
+        "val_r2": 0.8208265428785799,
+        "train_mae": 0.15255639167071056,
+        "train_rmse": 0.2209368234348564,
+        "train_r2": 0.9685048400768015
+      },
+      "ensemble_weights": {
+        "rf": 0.4242034702256876,
+        "gb": 0.5757965297743125
+      }
+    },
+    "delta": {
+      "mae_delta": 0.001470585064770602,
+      "rmse_delta": 0.0013443484906070502,
+      "r2_delta": -0.0009461769805463316,
+      "interpretation": "Temporal does NOT improve model"
+    }
+  },
+  "ablation_encoding": {
+    "encoding_hash": {
+      "scenario": "encoding_hash",
+      "description": "Hash encoding (IDs excluded, current default)",
+      "categorical_strategy": "hash",
+      "model_path": "/Users/thuan.nguyen.trong/Desktop/workspace/thuannt/modelAI/models/ablation_encoding_hash.joblib",
+      "model_version": "v1.0_20260503_173730",
+      "n_features": 76,
+      "metrics": {
+        "test_mae": 0.3944702090545577,
+        "test_rmse": 0.5748072534490358,
+        "test_r2": 0.7979563549476992,
+        "val_mae": 0.3691151151676534,
+        "val_rmse": 0.5407848059082759,
+        "val_r2": 0.8214276811777311,
+        "train_mae": 0.1483508232957071,
+        "train_rmse": 0.21573006418476823,
+        "train_r2": 0.9699718240349108
+      },
+      "ensemble_weights": {
+        "rf": 0.4241752553240971,
+        "gb": 0.5758247446759029
+      }
+    },
+    "encoding_frequency": {
+      "scenario": "encoding_frequency",
+      "description": "Frequency encoding (Subject_ID + Lecturer_ID as count features)",
+      "categorical_strategy": "frequency",
+      "model_path": "/Users/thuan.nguyen.trong/Desktop/workspace/thuannt/modelAI/models/ablation_encoding_frequency.joblib",
+      "model_version": "v1.0_20260503_173829",
+      "n_features": 78,
+      "metrics": {
+        "test_mae": 0.4042632007087768,
+        "test_rmse": 0.5820868233061812,
+        "test_r2": 0.7928064403052288,
+        "val_mae": 0.37991180119533563,
+        "val_rmse": 0.5458054402808098,
+        "val_r2": 0.8180965665817037,
+        "train_mae": 0.14585414880929212,
+        "train_rmse": 0.2082994638746851,
+        "train_r2": 0.9720047783007048
+      },
+      "ensemble_weights": {
+        "rf": 0.41775532786434005,
+        "gb": 0.5822446721356599
+      }
+    },
+    "encoding_target": {
+      "scenario": "encoding_target",
+      "description": "5-fold target encoding (Subject_ID + Lecturer_ID as smoothed mean)",
+      "categorical_strategy": "target",
+      "model_path": "/Users/thuan.nguyen.trong/Desktop/workspace/thuannt/modelAI/models/ablation_encoding_target.joblib",
+      "model_version": "v1.0_20260503_173933",
+      "n_features": 78,
+      "metrics": {
+        "test_mae": 0.4353805255318228,
+        "test_rmse": 0.6111319554830611,
+        "test_r2": 0.7716133566632143,
+        "val_mae": 0.4172038025033995,
+        "val_rmse": 0.5844448924582356,
+        "val_r2": 0.7914297741724243,
+        "train_mae": 0.1503510231164468,
+        "train_rmse": 0.21196657776218733,
+        "train_r2": 0.9710103893174774
+      },
+      "ensemble_weights": {
+        "rf": 0.41594821634675705,
+        "gb": 0.584051783653243
+      }
+    },
+    "best": {
+      "scenario": "encoding_hash",
+      "test_mae": 0.3944702090545577
+    }
+  }
+}
