@@ -12,7 +12,8 @@ Thư viện Python để dự đoán điểm CLO (Course Learning Outcome, thang
 - **Cross-validation**: `cross_validate()` — K-fold CV (GroupKFold by Student_ID hoặc KFold)
 - **Data quality**: `report_data_quality()` — missing rate, duplicate keys, target stats khi train
 - **Audit log**: JSONL prediction audit trail (opt-in via `set_audit_log_path()`)
-- **Encoding**: Deterministic hash encoding (`stable_hash_int`, mod 2^31−1) — không cần `LabelEncoder`, model tự validate encoding_method khi load
+- **Encoding**: 3 chiến lược cho Subject_ID/Lecturer_ID — `hash` (mặc định, `stable_hash_int`, mod 2^31−1), `frequency`, `target` (5-fold mean, smoothing) — model tự validate `encoding_method` (`hash_v2` / `frequency_v1` / `target_v1`) khi load
+- **Survey & Temporal (opt-in)**: Tích hợp dữ liệu khảo sát SV (`survey_path`) và temporal attendance features (`enable_temporal_features`) — đã ablation, **không cải thiện baseline** (xem `docs/EXPERIMENTS_LOG.md`)
 
 ## Yêu cầu
 
@@ -197,7 +198,33 @@ python scripts/analyze_class.py \
 
 Output: `ClassAnalysisOutput`.
 
-### 4. Dùng như thư viện (backend)
+### 4. Vẽ biểu đồ đánh giá (báo cáo)
+
+Sinh biểu đồ ROC, Precision-Recall, Learning Curve và các biểu đồ hồi quy từ cùng pipeline train:
+
+```bash
+export PYTHONPATH="${PYTHONPATH}:$(pwd)/src"
+
+python scripts/evaluate_visuals.py \
+  --exam-scores data/DiemTong.xlsx \
+  --conduct-scores data/diemrenluyen.xlsx \
+  --demographics data/nhankhau.xlsx \
+  --teaching-methods data/PPGDfull.xlsx \
+  --assessment-methods data/PPDGfull.xlsx \
+  --study-hours data/tuhoc.xlsx \
+  --attendance "data/Dữ liệu điểm danh Khoa FIRA.xlsx" \
+  --pass-threshold 3.0 \
+  --output-dir reports/figures
+```
+
+Ảnh đầu ra:
+- `reports/figures/roc_curve.png`
+- `reports/figures/precision_recall_curve.png`
+- `reports/figures/learning_curve.png`
+- `reports/figures/pred_vs_actual.png`
+- `reports/figures/residual_distribution.png`
+
+### 5. Dùng như thư viện (backend)
 
 **Import chính** — pipelines (train, predict, phân tích lớp):
 
@@ -300,10 +327,25 @@ Chi tiết test: xem `tests/README.md` và mục Testing trong `.cursor/rules.tx
 
 - `docs/model_requirements.md` — Yêu cầu model
 - `docs/data_model.md` — Cấu trúc dữ liệu
+- `docs/integration_guide.md` — Hướng dẫn tích hợp ml_clo vào backend
+- `docs/system_architecture.md` — Sơ đồ hệ thống (Mermaid)
 - `docs/FEASIBILITY_REPORT_NEW_REQUIREMENTS.md` — Đánh giá tính khả thi (yêu cầu mới)
 - `docs/IMPLEMENTATION_PLAN_NEW_REQUIREMENTS.md` — Kế hoạch triển khai (yêu cầu mới)
+- `docs/advisor_feedback_assessment.md` — Đánh giá tính khả thi 4 feedback từ giảng viên hướng dẫn
+- `docs/IMPLEMENTATION_PLAN_ADVISOR_FEEDBACK.md` — Kế hoạch triển khai feedback (1, 2, 3)
+- `docs/EXPERIMENTS_LOG.md` — Nhật ký thực nghiệm + bảng số liệu cho luận văn (3 ablation studies)
 - `.cursor/rules.txt` — Quy tắc project, testing, plan
 - `plan.txt` — Kế hoạch phát triển từng giai đoạn
+
+### Ablation Studies (advisor feedback validation)
+
+```bash
+python scripts/run_ablation_survey.py     # Phase 1: LMS vs LMS+Survey
+python scripts/run_ablation_temporal.py   # Phase 2: + temporal attendance features
+python scripts/run_ablation_encoding.py   # Phase 3: hash vs frequency vs target encoding
+```
+
+Kết quả tổng hợp lưu vào `experiments/results.json` và phân tích chi tiết trong `docs/EXPERIMENTS_LOG.md`.
 
 ## Dùng trong dự án khác (import như module)
 
@@ -350,6 +392,33 @@ pip install /path/to/modelAI/dist/ml_clo-0.1.0.tar.gz
 ```
 
 Rồi `import ml_clo` như trên. Có thể copy thư mục `dist/` hoặc đưa lên server/file nội bộ rồi `pip install <url-hoặc-path>`.
+
+---
+
+## Feedback từ giảng viên — Đã ablation (2026-05)
+
+**Đánh giá tính khả thi:** [docs/advisor_feedback_assessment.md](docs/advisor_feedback_assessment.md)
+**Kế hoạch triển khai:** [docs/IMPLEMENTATION_PLAN_ADVISOR_FEEDBACK.md](docs/IMPLEMENTATION_PLAN_ADVISOR_FEEDBACK.md)
+**Nhật ký thực nghiệm:** [docs/EXPERIMENTS_LOG.md](docs/EXPERIMENTS_LOG.md)
+
+3 trên 4 feedback đã triển khai và kiểm chứng bằng ablation study (cùng `random_state=42`):
+
+| Feedback | Kết quả MAE | Verdict |
+| --- | --- | --- |
+| #1 — Temporal features (slope/volatility chuyên cần) | 0.3945 → 0.3959 | ❌ Coverage attendance 28.6% chưa đủ |
+| #2 — Survey integration (LMS + khảo sát) | 0.3945 → 0.3954 | ❌ Coverage 2.6% records → noise > signal |
+| #3 — Encoding alternatives (hash vs frequency vs target) | 0.3945 / 0.4043 / 0.4354 | ❌ Hash + exclude IDs vẫn tối ưu |
+| #4 — Đổi SHAP sang causal | — | Không thực hiện (xem assessment) |
+
+**Kết luận:** Baseline 76 features + hash encoding vẫn là kiến trúc tối ưu trên dataset hiện tại. 3 ablation đều cho **bằng chứng số liệu phản chứng các giả thuyết phổ biến** — giá trị học thuật cao cho luận văn.
+
+**Files mới:**
+
+- `src/ml_clo/data/survey_preprocessor.py` — Likert/multi-hot/range encoding
+- `src/ml_clo/features/temporal_features.py` — slope/volatility/late-streak per student-year
+- `src/ml_clo/features/categorical_encoder.py` — `FrequencyEncoder`, `TargetEncoder` (5-fold smoothing)
+- `scripts/run_ablation_*.py` — 3 ablation scripts
+- 38 unit tests mới trong `tests/unit/test_data/` và `tests/unit/test_features/`
 
 ---
 

@@ -570,6 +570,97 @@ def merge_attendance(
     return merged
 
 
+def merge_survey_responses(
+    df: pd.DataFrame,
+    survey_df: pd.DataFrame,
+    year_column: str = "year",
+) -> pd.DataFrame:
+    """Merge preprocessed survey responses keyed by (Student_ID, year, [semester]).
+
+    The survey DataFrame is expected to be the output of
+    ``ml_clo.data.survey_preprocessor.preprocess_survey`` — it has
+    ``Student_ID``, ``year`` (4-digit int), ``semester`` (int) and a number of
+    ``survey_*`` columns. We merge on whichever keys are present, falling back
+    to (Student_ID, year) if the main df lacks a semester column.
+
+    Adds ``has_survey_response`` flag (1 if matched, 0 otherwise) so the
+    model can distinguish imputed survey features from real responses.
+    """
+    logger.info("Merging survey responses")
+
+    if "Student_ID" not in df.columns:
+        raise DataValidationError("Main DataFrame must have 'Student_ID'")
+    if "Student_ID" not in survey_df.columns:
+        raise DataValidationError("Survey DataFrame must have 'Student_ID'")
+
+    df = df.copy()
+    survey = survey_df.copy()
+
+    # Normalise key dtypes — match left side. Most pipelines have numeric
+    # Student_ID; fall back to string if not coercible.
+    if pd.api.types.is_numeric_dtype(df["Student_ID"]):
+        survey["Student_ID"] = pd.to_numeric(
+            survey["Student_ID"], errors="coerce"
+        )
+        survey = survey.dropna(subset=["Student_ID"])
+        survey["Student_ID"] = survey["Student_ID"].astype(df["Student_ID"].dtype)
+    else:
+        df["Student_ID"] = df["Student_ID"].astype(str).str.strip()
+        survey["Student_ID"] = survey["Student_ID"].astype(str).str.strip()
+
+    # Year: main df has int year; survey "year" is "2025-2026" → take first 4 digits
+    if "year" in survey.columns:
+        survey["year"] = (
+            survey["year"].astype(str).str.extract(r"(\d{4})", expand=False)
+        )
+        survey["year"] = pd.to_numeric(survey["year"], errors="coerce")
+
+    # Determine merge keys
+    merge_keys = ["Student_ID"]
+    if year_column in df.columns and "year" in survey.columns:
+        merge_keys.append("year")
+        if "year" != year_column:
+            survey = survey.rename(columns={"year": year_column})
+            merge_keys[-1] = year_column
+
+    # Drop semester from survey before merge unless main df has matching column.
+    # Tránh duplicate row do mỗi exam record không gắn với 1 semester cụ thể.
+    if "semester" in survey.columns and "semester" not in df.columns:
+        # Aggregate survey to (Student_ID, year) — keep latest semester per student/year
+        survey = (
+            survey.sort_values("semester")
+            .drop(columns=["semester"])
+            .drop_duplicates(subset=merge_keys, keep="last")
+        )
+    elif "semester" in survey.columns and "semester" in df.columns:
+        merge_keys.append("semester")
+
+    survey_cols = [c for c in survey.columns if c.startswith("survey_")]
+    merged = df.merge(
+        survey[merge_keys + survey_cols],
+        on=merge_keys,
+        how="left",
+        suffixes=("", "_survey"),
+    )
+
+    # has_survey_response flag — 1 if any survey column is non-null
+    if survey_cols:
+        merged["has_survey_response"] = (
+            merged[survey_cols].notna().any(axis=1).astype(int)
+        )
+    else:
+        merged["has_survey_response"] = 0
+
+    matched = int(merged["has_survey_response"].sum())
+    logger.info(
+        f"Merged survey: {len(merged)} records "
+        f"({matched} matched survey responses, "
+        f"{len(survey_cols)} survey features added)"
+    )
+
+    return merged
+
+
 def merge_all_data_sources(
     exam_df: pd.DataFrame,
     conduct_df: Optional[pd.DataFrame] = None,
@@ -578,6 +669,7 @@ def merge_all_data_sources(
     assessment_methods_df: Optional[pd.DataFrame] = None,
     study_hours_df: Optional[pd.DataFrame] = None,
     attendance_df: Optional[pd.DataFrame] = None,
+    survey_df: Optional[pd.DataFrame] = None,
     year_column: str = "year",
 ) -> pd.DataFrame:
     """Merge all data sources into a single training dataset.
@@ -648,6 +740,10 @@ def merge_all_data_sources(
     if attendance_df is not None:
         merged = merge_attendance(merged, attendance_df, year_column=year_column)
 
+    # Merge survey responses (Phase 1 — advisor feedback)
+    if survey_df is not None:
+        merged = merge_survey_responses(merged, survey_df, year_column=year_column)
+
     logger.info(
         f"Complete merging pipeline finished: {len(merged)} records "
         f"(started with {original_count} exam score records)"
@@ -665,6 +761,7 @@ def create_training_dataset(
     assessment_methods_df: Optional[pd.DataFrame] = None,
     study_hours_df: Optional[pd.DataFrame] = None,
     attendance_df: Optional[pd.DataFrame] = None,
+    survey_df: Optional[pd.DataFrame] = None,
     year_column: str = "year",
     target_column: str = "exam_score",
     drop_missing_target: bool = True,
@@ -706,6 +803,7 @@ def create_training_dataset(
         assessment_methods_df=assessment_methods_df,
         study_hours_df=study_hours_df,
         attendance_df=attendance_df,
+        survey_df=survey_df,
         year_column=year_column,
     )
 

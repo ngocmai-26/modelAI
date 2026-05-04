@@ -380,10 +380,18 @@ class PredictionPipeline:
         logger.info("Preparing features for prediction")
 
         # DESIGN-02: shared encoder. Note: predict path does NOT need y.
-        X, _, _ = shared_prepare_features(
+        # Use the strategy + fitted encoders persisted on the model artifact
+        # so predictions match training-time encoding exactly.
+        strategy = getattr(self.model, "categorical_strategy", "hash") if self.model else "hash"
+        encoders = getattr(self.model, "fitted_encoders", None) if self.model else None
+        X, _, _, _ = shared_prepare_features(
             student_df,
             feature_names=self.feature_names,
             target_column="exam_score",
+            categorical_strategy=strategy,
+            include_id_features=(strategy != "hash"),
+            fitted_encoders=encoders,
+            fit=False,
         )
 
         logger.info(f"Features prepared: {X.shape}")

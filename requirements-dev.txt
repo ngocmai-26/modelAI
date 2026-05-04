@@ -15,4 +15,7 @@ mypy>=1.0.0
 sphinx>=5.0.0
 sphinx-rtd-theme>=1.0.0
 
+# Reporting / visualization
+matplotlib>=3.8.0
+
 

@@ -402,6 +402,33 @@ def load_attendance(file_path: str) -> pd.DataFrame:
     return df
 
 
+def load_survey_responses(file_path: str) -> pd.DataFrame:
+    """Load student survey response file (Phase 1 — advisor feedback).
+
+    Expected columns include the merge keys:
+        - "1.1. Mã sinh viên" → Student_ID
+        - "1.2. Năm học"      → year
+        - "1.3. Học kỳ"       → semester (text like "Học kì 1")
+    plus 30+ Likert / multi-select / numeric-range columns covering family,
+    finance, mental health, study habits, and tech access.
+
+    Returns the raw DataFrame; numeric encoding is done by
+    ``ml_clo.data.survey_preprocessor.preprocess_survey``.
+    """
+    df = _load_excel_file(file_path)
+
+    required_keys = ["1.1. Mã sinh viên", "1.2. Năm học", "1.3. Học kỳ"]
+    missing = [c for c in required_keys if c not in df.columns]
+    if missing:
+        logger.warning(
+            f"Survey file missing key columns: {missing}. "
+            f"Available: {list(df.columns)[:5]}..."
+        )
+
+    logger.info(f"Successfully loaded survey: {len(df)} responses")
+    return df
+
+
 def load_all_data_files(data_dir: str) -> dict[str, pd.DataFrame]:
     """Load all data files from a directory.
 

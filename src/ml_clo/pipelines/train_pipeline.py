@@ -24,10 +24,12 @@ from ml_clo.data.loaders import (
     load_demographics,
     load_exam_scores,
     load_study_hours,
+    load_survey_responses,
     load_teaching_methods,
 )
 from ml_clo.data.mergers import create_training_dataset
 from ml_clo.data.preprocessors import preprocess_exam_scores
+from ml_clo.data.survey_preprocessor import preprocess_survey
 from ml_clo.features.feature_builder import build_all_features
 from ml_clo.features.feature_encoder import prepare_features as shared_prepare_features
 from ml_clo.models.ensemble_model import EnsembleModel
@@ -52,6 +54,8 @@ class TrainingPipeline:
         test_size: float = 0.2,
         validation_size: float = 0.2,
         group_split_by_student: bool = True,
+        enable_temporal_features: bool = False,
+        categorical_strategy: str = "label",
     ):
         """Initialize training pipeline.
 
@@ -62,11 +66,22 @@ class TrainingPipeline:
             group_split_by_student: Mặc định True — GroupShuffleSplit theo Student_ID
                 (một MSSV không vừa train vừa test). Đặt False hoặc dùng --no-group-split
                 trên CLI để chia ngẫu nhiên theo dòng.
+            enable_temporal_features: When True, derive temporal attendance
+                features (slope/volatility/dropoff) from raw attendance.
+            categorical_strategy: Encoding for categorical IDs and other
+                object/category columns. One of ``"label"`` (default,
+                deterministic ``[0, N-1]`` mapping via
+                ``LabelEncoderWrapper`` — supports ``inverse_transform``
+                for explainability), ``"hash"`` (legacy MD5 hashing),
+                ``"frequency"``, or ``"target"`` (5-fold mean target
+                encoding).
         """
         self.random_state = random_state
         self.test_size = test_size
         self.validation_size = validation_size
         self.group_split_by_student = group_split_by_student
+        self.enable_temporal_features = enable_temporal_features
+        self.categorical_strategy = categorical_strategy
         self.feature_names: Optional[list] = None
 
     def load_data(
@@ -78,6 +93,7 @@ class TrainingPipeline:
         assessment_methods_path: Optional[str] = None,
         study_hours_path: Optional[str] = None,
         attendance_path: Optional[str] = None,
+        survey_path: Optional[str] = None,
     ) -> Dict[str, pd.DataFrame]:
         """Load all data sources.
 
@@ -88,6 +104,7 @@ class TrainingPipeline:
             teaching_methods_path: Path to teaching methods file (optional)
             assessment_methods_path: Path to assessment methods file (optional)
             study_hours_path: Path to study hours file (optional)
+            survey_path: Path to student survey response file (optional)
 
         Returns:
             Dictionary mapping data source names to DataFrames
@@ -135,6 +152,13 @@ class TrainingPipeline:
             data["attendance"] = load_attendance(attendance_path)
             logger.info(f"Loaded attendance: {len(data['attendance'])} records")
 
+        if survey_path and Path(survey_path).exists():
+            raw_survey = load_survey_responses(survey_path)
+            data["survey"] = preprocess_survey(raw_survey)
+            logger.info(
+                f"Loaded survey: {len(data['survey'])} preprocessed responses"
+            )
+
         return data
 
     def prepare_training_dataset(
@@ -158,6 +182,7 @@ class TrainingPipeline:
         em_df = data.get("assessment_methods")
         study_df = data.get("study_hours")
         attendance_df = data.get("attendance")
+        survey_df = data.get("survey")
 
         # Merge all data
         training_df = create_training_dataset(
@@ -168,6 +193,7 @@ class TrainingPipeline:
             assessment_methods_df=em_df,
             study_hours_df=study_df,
             attendance_df=attendance_df,
+            survey_df=survey_df,
             target_column="exam_score",
             drop_missing_target=True,
         )
@@ -178,6 +204,7 @@ class TrainingPipeline:
             conduct_history_df=conduct_df,
             exam_history_df=exam_df,
             study_hours_df=study_df,
+            attendance_history_df=attendance_df if self.enable_temporal_features else None,
         )
 
         logger.info(
@@ -260,17 +287,22 @@ class TrainingPipeline:
         """
         logger.info("Preparing features for training")
 
-        # DESIGN-02: Single source of truth for feature selection + encoding.
-        X, y, feature_cols = shared_prepare_features(
+        include_id = self.categorical_strategy != "hash"
+        X, y, feature_cols, encoders = shared_prepare_features(
             training_df,
             feature_names=None,
             target_column="exam_score",
+            categorical_strategy=self.categorical_strategy,
+            include_id_features=include_id,
+            fit=True,
         )
         self.feature_names = feature_cols
+        self.fitted_encoders = encoders
 
         logger.info(
             f"Features prepared: {len(self.feature_names)} features, "
-            f"{len(X)} samples"
+            f"{len(X)} samples (encoding={self.categorical_strategy}, "
+            f"include_id_features={include_id})"
         )
 
         return X, y, self.feature_names
@@ -517,6 +549,20 @@ class TrainingPipeline:
         """
         logger.info(f"Saving model to {output_path}")
 
+        # Persist categorical strategy + fitted encoders so predict/analyze
+        # can reproduce the exact training-time encoding (Phase 3).
+        encoding_method = {
+            "label": "label_v1",
+            "hash": "hash_v2",
+            "frequency": "frequency_v1",
+            "target": "target_v1",
+        }.get(self.categorical_strategy, "label_v1")
+        model.extra_metadata["encoding_method"] = encoding_method
+        model.extra_metadata["categorical_strategy"] = self.categorical_strategy
+        model.extra_metadata["fitted_encoders"] = getattr(self, "fitted_encoders", {})
+        model.categorical_strategy = self.categorical_strategy
+        model.fitted_encoders = getattr(self, "fitted_encoders", {})
+
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -534,6 +580,7 @@ class TrainingPipeline:
         assessment_methods_path: Optional[str] = None,
         study_hours_path: Optional[str] = None,
         attendance_path: Optional[str] = None,
+        survey_path: Optional[str] = None,
     ) -> Tuple[EnsembleModel, Dict[str, float]]:
         """Run complete training pipeline.
 
@@ -561,6 +608,7 @@ class TrainingPipeline:
             assessment_methods_path=assessment_methods_path,
             study_hours_path=study_hours_path,
             attendance_path=attendance_path,
+            survey_path=survey_path,
         )
 
         # Step 2: Prepare training dataset

@@ -384,6 +384,7 @@ def build_all_features(
     conduct_history_df: Optional[pd.DataFrame] = None,
     exam_history_df: Optional[pd.DataFrame] = None,
     study_hours_df: Optional[pd.DataFrame] = None,
+    attendance_history_df: Optional[pd.DataFrame] = None,
     student_id_column: str = "Student_ID",
     year_column: str = "year",
 ) -> pd.DataFrame:
@@ -393,12 +394,16 @@ def build_all_features(
     - Conduct features
     - Academic history features
     - Study hours features
+    - Temporal attendance features (slope/volatility per student-year)
 
     Args:
         df: Main DataFrame (merged training dataset)
         conduct_history_df: Historical conduct scores (optional)
         exam_history_df: Historical exam scores (optional, must be preprocessed)
         study_hours_df: Study hours DataFrame (optional)
+        attendance_history_df: Raw attendance frame (optional). When supplied,
+            temporal features (slope, volatility, late streak, early-dropoff)
+            are derived per (student, year) and merged onto ``df``.
         student_id_column: Name of student ID column (default: "Student_ID")
         year_column: Name of year column (default: "year")
 
@@ -420,6 +425,15 @@ def build_all_features(
     # Build study hours features
     if study_hours_df is not None:
         df = build_study_hours_features(df, study_hours_df, student_id_column, year_column)
+
+    # Build temporal attendance features (Phase 2 — advisor feedback #1)
+    if attendance_history_df is not None:
+        from ml_clo.features.temporal_features import (
+            build_temporal_attendance_features,
+            merge_temporal_attendance_features,
+        )
+        temporal = build_temporal_attendance_features(attendance_history_df)
+        df = merge_temporal_attendance_features(df, temporal, year_column=year_column)
 
     logger.info(f"Feature engineering complete: {len(df)} records, {len(df.columns)} columns")
     return df
