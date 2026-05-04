@@ -389,11 +389,11 @@ class EnsembleModel(BaseModel):
                 "pipeline and is incompatible with the current hash-based "
                 "encoding. Please retrain the model."
             )
-        if encoding_method not in ("hash_v2", "frequency_v1", "target_v1"):
+        if encoding_method not in ("label_v1", "hash_v2", "frequency_v1", "target_v1"):
             raise ModelLoadError(
                 f"Unsupported encoding_method '{encoding_method}' in model "
-                f"{file_path}. Expected 'hash_v2', 'frequency_v1', or "
-                f"'target_v1'. Please retrain the model."
+                f"{file_path}. Expected 'label_v1', 'hash_v2', 'frequency_v1', "
+                f"or 'target_v1'. Please retrain the model."
             )
 
         # Restore fitted categorical encoders + strategy so predict-time

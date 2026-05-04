@@ -21,9 +21,37 @@ logger = get_logger(__name__)
 DEFAULT_EXCLUDE_COLS = ("Student_ID", "Subject_ID", "Lecturer_ID", "exam_score", "year")
 # IDs that may optionally be included as features (Phase 3 ablation).
 ID_FEATURE_COLS = ("Subject_ID", "Lecturer_ID")
-# Features explicitly excluded for stability (raw min score is too noisy;
-# the model uses min_exam_score_adj + academic_core_score instead).
-ALWAYS_EXCLUDE_FEATURES = ("min_exam_score",)
+# Features explicitly excluded for stability or to prevent target leakage.
+#
+# Why each column is dropped:
+#   - ``min_exam_score``       : raw min score is too noisy; the model uses
+#                                ``min_exam_score_adj`` + ``academic_core_score``.
+#   - ``summary_score``        : DiemTong column derived from the same exam
+#                                grading as the target (corr ≈ 0.9 with
+#                                ``exam_score``) — direct target leakage.
+#   - ``letter_system``        : letter grade (A/B/C/D) is a deterministic
+#                                bucketing of ``exam_score``.
+#   - ``Passed_the_module``    : Pass/Fail flag computed from the exam score.
+#
+# These three columns are unambiguous leakage sources (they encode the
+# exam outcome directly). They were previously masked by MD5 hashing —
+# the hash spread values across ``[0, 10^9)`` so trees could not learn an
+# effective split — but with ``LabelEncoderWrapper`` mapping into
+# ``[0, N-1]`` the leakage becomes learnable and inflates Test R² above
+# 0.98. Dropping them is the principled fix regardless of encoder.
+#
+# Other potentially noisy columns (Test, L2, Library, Birthdate,
+# Subject_Name, Lecturer_Name, ...) are intentionally left in the
+# feature set: their correlation with the target is weak (|r| < 0.5),
+# they carry residual pedagogical or contextual signal, and excluding
+# them all degrades Test R² substantially. The encoder still controls
+# how they are turned into integers (LabelEncoder vs hash).
+ALWAYS_EXCLUDE_FEATURES = (
+    "min_exam_score",
+    "summary_score",
+    "letter_system",
+    "Passed_the_module",
+)
 
 
 def select_feature_columns(
@@ -64,7 +92,7 @@ def select_feature_columns(
 
 def encode_features(
     X: pd.DataFrame,
-    categorical_strategy: str = "hash",
+    categorical_strategy: str = "label",
     fitted_encoders: Optional[Dict[str, Any]] = None,
     y: Optional[pd.Series] = None,
     fit: bool = True,
@@ -74,8 +102,14 @@ def encode_features(
     Args:
         X: Feature matrix (will be copied internally).
         categorical_strategy: Encoder for ``ID_FEATURE_COLS`` (Subject_ID,
-            Lecturer_ID): one of ``"hash"`` (default), ``"frequency"``,
-            ``"target"``. All other object/category columns always use hash.
+            Lecturer_ID): one of ``"label"`` (default — deterministic
+            ``[0, N-1]`` mapping via ``LabelEncoderWrapper``), ``"hash"``
+            (legacy MD5 hashing), ``"frequency"``, or ``"target"``.
+            Other object/category columns are also encoded using
+            ``LabelEncoderWrapper`` when strategy is ``"label"`` (so a
+            saved model can deterministically reproduce the encoding at
+            predict time); they fall back to ``stable_hash_int`` only
+            when strategy is ``"hash"``.
         fitted_encoders: When non-None and ``fit=False``, reuse these fitted
             encoders for transform-only mode (predict/analyse path).
         y: Target vector — required when fitting target encoder.
@@ -88,6 +122,7 @@ def encode_features(
     """
     from ml_clo.features.categorical_encoder import (
         FrequencyEncoder,
+        LabelEncoderWrapper,
         TargetEncoder,
     )
 
@@ -96,13 +131,18 @@ def encode_features(
         dict(fitted_encoders) if (fitted_encoders and not fit) else {}
     )
 
+    use_label_for_other_object = categorical_strategy == "label"
+
     for col in X.columns:
         is_object = X[col].dtype == "object" or X[col].dtype.name == "category"
         is_id_col = col in ID_FEATURE_COLS
 
         if is_id_col and categorical_strategy != "hash":
             if fit:
-                if categorical_strategy == "frequency":
+                if categorical_strategy == "label":
+                    enc = LabelEncoderWrapper()
+                    X[col] = enc.fit_transform(X[col])
+                elif categorical_strategy == "frequency":
                     enc = FrequencyEncoder()
                     X[col] = enc.fit_transform(X[col])
                 elif categorical_strategy == "target":
@@ -127,7 +167,21 @@ def encode_features(
             continue
 
         if is_object:
-            X[col] = X[col].map(stable_hash_int)
+            if use_label_for_other_object:
+                if fit:
+                    enc = LabelEncoderWrapper()
+                    X[col] = enc.fit_transform(X[col])
+                    encoders[col] = enc
+                else:
+                    enc = encoders.get(col)
+                    if enc is None:
+                        # Backward-compat: a model trained before label
+                        # encoding may not carry an encoder for this column.
+                        X[col] = X[col].map(stable_hash_int)
+                    else:
+                        X[col] = enc.transform(X[col])
+            else:
+                X[col] = X[col].map(stable_hash_int)
         elif X[col].dtype.kind in "iuf":
             if X[col].notna().any():
                 X[col] = X[col].fillna(X[col].median())
@@ -141,7 +195,19 @@ def encode_features(
                 else:
                     X[col] = X[col].fillna(0)
             except (ValueError, TypeError):
-                X[col] = X[col].map(stable_hash_int)
+                if use_label_for_other_object:
+                    if fit:
+                        enc = LabelEncoderWrapper()
+                        X[col] = enc.fit_transform(X[col])
+                        encoders[col] = enc
+                    else:
+                        enc = encoders.get(col)
+                        if enc is None:
+                            X[col] = X[col].map(stable_hash_int)
+                        else:
+                            X[col] = enc.transform(X[col])
+                else:
+                    X[col] = X[col].map(stable_hash_int)
 
     X = X.apply(pd.to_numeric, errors="coerce")
     nan_count = int(X.isna().sum().sum())
@@ -156,7 +222,7 @@ def prepare_features(
     df: pd.DataFrame,
     feature_names: Optional[List[str]] = None,
     target_column: str = "exam_score",
-    categorical_strategy: str = "hash",
+    categorical_strategy: str = "label",
     include_id_features: bool = False,
     fitted_encoders: Optional[Dict[str, Any]] = None,
     fit: bool = True,
@@ -167,8 +233,8 @@ def prepare_features(
         df: Source DataFrame after merging + feature building.
         feature_names: Optional training-time feature order to enforce.
         target_column: Name of target column (default "exam_score").
-        categorical_strategy: Encoder for ID columns (``"hash"``, ``"frequency"``,
-            or ``"target"``).
+        categorical_strategy: Encoder for ID columns (``"label"`` default,
+            ``"hash"``, ``"frequency"``, or ``"target"``).
         include_id_features: When True, ``Subject_ID``/``Lecturer_ID`` are
             kept and encoded; required for non-hash strategies to have effect.
         fitted_encoders: Existing encoders for transform-only mode.

@@ -198,7 +198,33 @@ python scripts/analyze_class.py \
 
 Output: `ClassAnalysisOutput`.
 
-### 4. Dùng như thư viện (backend)
+### 4. Vẽ biểu đồ đánh giá (báo cáo)
+
+Sinh biểu đồ ROC, Precision-Recall, Learning Curve và các biểu đồ hồi quy từ cùng pipeline train:
+
+```bash
+export PYTHONPATH="${PYTHONPATH}:$(pwd)/src"
+
+python scripts/evaluate_visuals.py \
+  --exam-scores data/DiemTong.xlsx \
+  --conduct-scores data/diemrenluyen.xlsx \
+  --demographics data/nhankhau.xlsx \
+  --teaching-methods data/PPGDfull.xlsx \
+  --assessment-methods data/PPDGfull.xlsx \
+  --study-hours data/tuhoc.xlsx \
+  --attendance "data/Dữ liệu điểm danh Khoa FIRA.xlsx" \
+  --pass-threshold 3.0 \
+  --output-dir reports/figures
+```
+
+Ảnh đầu ra:
+- `reports/figures/roc_curve.png`
+- `reports/figures/precision_recall_curve.png`
+- `reports/figures/learning_curve.png`
+- `reports/figures/pred_vs_actual.png`
+- `reports/figures/residual_distribution.png`
+
+### 5. Dùng như thư viện (backend)
 
 **Import chính** — pipelines (train, predict, phân tích lớp):
 

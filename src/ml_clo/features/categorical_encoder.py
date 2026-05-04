@@ -1,11 +1,16 @@
 """Categorical encoders for tree models (Phase 3 — advisor feedback #3).
 
-The default ``stable_hash_int`` encoder maps categorical IDs (Subject_ID,
+The legacy ``stable_hash_int`` encoder maps categorical IDs (Subject_ID,
 Lecturer_ID) to a 31-bit hash. Tree splits on a hash space have no
 pedagogical meaning — two semantically-similar subjects end up at
-arbitrary numeric distances. This module provides two structured
+arbitrary numeric distances. This module provides three structured
 alternatives:
 
+- ``LabelEncoderWrapper``: deterministic 1-1 mapping into ``[0, N-1]``.
+  Smaller value range makes tree splits faster and more stable; the
+  mapping is reversible (``inverse_transform``) and safe under unseen
+  inputs (returns ``unknown_label`` instead of silently hashing into
+  a random bucket).
 - ``FrequencyEncoder``: replace category with its train-set frequency.
   Cheap, robust, but loses meaning when frequencies collide.
 - ``TargetEncoder``: replace category with K-fold mean of the target
@@ -14,7 +19,7 @@ alternatives:
   predict time, which makes the encoder safe under the existing
   ``__UNKNOWN__`` handling.
 
-Both encoders are picklable (state lives in plain dicts/floats), so
+All encoders are picklable (state lives in plain dicts/floats), so
 they can be saved alongside the model in ``extra_metadata``.
 """
 
@@ -37,6 +42,56 @@ def _key(value: object) -> str:
         return "__MISSING__"
     s = str(value).strip()
     return s if s else "__MISSING__"
+
+
+@dataclass
+class LabelEncoderWrapper:
+    """Deterministic label encoder mapping categories to ``[0, N-1]``.
+
+    Compared to ``stable_hash_int`` (MD5 hashing), this encoder:
+      * keeps the value range tight (``[0, N-1]``) so tree splits are
+        faster and the model is less prone to overfitting on hash noise;
+      * is reversible via ``inverse_transform`` — useful when explaining
+        a SHAP attribution back to the original Subject_ID / Lecturer_ID;
+      * handles unseen IDs at predict time explicitly via
+        ``unknown_label`` instead of silently mapping them into a random
+        bucket.
+
+    Args:
+        unknown_label: Integer code returned for categories that were
+            never seen at fit time. Defaults to ``-1`` so unseen IDs are
+            distinguishable from any trained bucket.
+    """
+
+    classes_: Dict[str, int] = field(default_factory=dict)
+    unknown_label: int = -1
+
+    def fit(self, X_col: pd.Series) -> "LabelEncoderWrapper":
+        # Collect unique non-null keys, sort for determinism so the same
+        # input data always produces the same integer codes regardless of
+        # row order.
+        keys = sorted(set(X_col.map(_key).tolist()))
+        self.classes_ = {k: i for i, k in enumerate(keys)}
+        return self
+
+    def transform(self, X_col: pd.Series) -> pd.Series:
+        return (
+            X_col.map(_key)
+            .map(self.classes_)
+            .fillna(self.unknown_label)
+            .astype("int64")
+        )
+
+    def fit_transform(
+        self, X_col: pd.Series, y: Optional[pd.Series] = None
+    ) -> pd.Series:
+        self.fit(X_col)
+        return self.transform(X_col)
+
+    def inverse_transform(self, codes: pd.Series) -> pd.Series:
+        """Reverse mapping for debugging / Feature Importance reports."""
+        inverse = {i: k for k, i in self.classes_.items()}
+        return codes.map(inverse).fillna("__UNKNOWN__")
 
 
 @dataclass

@@ -55,7 +55,7 @@ class TrainingPipeline:
         validation_size: float = 0.2,
         group_split_by_student: bool = True,
         enable_temporal_features: bool = False,
-        categorical_strategy: str = "hash",
+        categorical_strategy: str = "label",
     ):
         """Initialize training pipeline.
 
@@ -68,9 +68,13 @@ class TrainingPipeline:
                 trên CLI để chia ngẫu nhiên theo dòng.
             enable_temporal_features: When True, derive temporal attendance
                 features (slope/volatility/dropoff) from raw attendance.
-            categorical_strategy: Encoding for high-cardinality categorical IDs.
-                One of ``"hash"`` (default, deterministic SHA-256-based),
-                ``"frequency"``, or ``"target"`` (5-fold mean target encoding).
+            categorical_strategy: Encoding for categorical IDs and other
+                object/category columns. One of ``"label"`` (default,
+                deterministic ``[0, N-1]`` mapping via
+                ``LabelEncoderWrapper`` — supports ``inverse_transform``
+                for explainability), ``"hash"`` (legacy MD5 hashing),
+                ``"frequency"``, or ``"target"`` (5-fold mean target
+                encoding).
         """
         self.random_state = random_state
         self.test_size = test_size
@@ -548,10 +552,11 @@ class TrainingPipeline:
         # Persist categorical strategy + fitted encoders so predict/analyze
         # can reproduce the exact training-time encoding (Phase 3).
         encoding_method = {
+            "label": "label_v1",
             "hash": "hash_v2",
             "frequency": "frequency_v1",
             "target": "target_v1",
-        }.get(self.categorical_strategy, "hash_v2")
+        }.get(self.categorical_strategy, "label_v1")
         model.extra_metadata["encoding_method"] = encoding_method
         model.extra_metadata["categorical_strategy"] = self.categorical_strategy
         model.extra_metadata["fitted_encoders"] = getattr(self, "fitted_encoders", {})
