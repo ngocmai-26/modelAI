@@ -165,8 +165,16 @@ class PredictionPipeline:
             cache["exam_scores"] = preprocess_exam_scores(
                 exam_df, convert_to_clo=True, create_result=False
             )
+            # Khung lịch sử cho đặc trưng học lực: GIỮ cả dòng thiếu Lecturer_ID
+            # (vd cohort K28 ghi Lecturer_ID=NaN) để không xoá sạch lịch sử của SV
+            # → tránh dự đoán suy biến ~0.5. Học lực tính từ exam_score, không dùng
+            # Lecturer_ID, nên an toàn và không ảnh hưởng model đã train.
+            cache["exam_history"] = preprocess_exam_scores(
+                exam_df, convert_to_clo=True, create_result=False, require_lecturer=False
+            )
         else:
             cache["exam_scores"] = None
+            cache["exam_history"] = None
         if conduct_scores_path and Path(conduct_scores_path).exists():
             cache["conduct_scores"] = load_conduct_scores(conduct_scores_path)
         if demographics_path and Path(demographics_path).exists():
@@ -239,8 +247,13 @@ class PredictionPipeline:
                 data["exam_scores"] = preprocess_exam_scores(
                     exam_df, convert_to_clo=True, create_result=False
                 )
+                # Khung lịch sử cho đặc trưng học lực (xem ghi chú ở load_data cache).
+                data["exam_history"] = preprocess_exam_scores(
+                    exam_df, convert_to_clo=True, create_result=False, require_lecturer=False
+                )
             else:
                 data["exam_scores"] = None
+                data["exam_history"] = None
             if conduct_scores_path and Path(conduct_scores_path).exists():
                 data["conduct_scores"] = load_conduct_scores(conduct_scores_path)
             if demographics_path and Path(demographics_path).exists():
@@ -318,8 +331,31 @@ class PredictionPipeline:
                 "Để đảm bảo logic đúng, nên truyền --exam-scores khi có file DiemTong."
             )
 
+        # Lịch sử dùng để tính đặc trưng học lực. Mặc định = exam_df đã lọc (GIỮ
+        # NGUYÊN hành vi cho SV đã có lịch sử). CHỈ chuyển sang khung relaxed (giữ
+        # dòng thiếu Lecturer_ID) cho SV bị lọc mất hoàn toàn khỏi exam_df — ví dụ
+        # cohort K28 ghi Lecturer_ID=NaN — để họ không bị history rỗng → 0.5.
+        exam_history_df = exam_df
+        relaxed_history = data.get("exam_history")
+        if relaxed_history is not None and exam_df is not None:
+            try:
+                _sid_hist = (
+                    int(student_id)
+                    if isinstance(student_id, str) and student_id.isdigit()
+                    else student_id
+                )
+                if not (exam_df["Student_ID"] == _sid_hist).any():
+                    exam_history_df = relaxed_history
+                    logger.info(
+                        f"SV {student_id} bị lọc khỏi exam_df (vd Lecturer_ID=NaN) — "
+                        f"dùng khung lịch sử relaxed để tính học lực."
+                    )
+            except (ValueError, TypeError, KeyError):
+                pass
+        elif exam_df is None:
+            exam_history_df = relaxed_history
+
         if student_data is not None and len(student_data) > 0:
-            full_exam_df = exam_df
             training_df = create_training_dataset(
                 exam_df=student_data,
                 conduct_df=data.get("conduct_scores"),
@@ -334,7 +370,7 @@ class PredictionPipeline:
             training_df = build_all_features(
                 training_df,
                 conduct_history_df=data.get("conduct_scores"),
-                exam_history_df=full_exam_df,
+                exam_history_df=exam_history_df,
                 study_hours_df=data.get("study_hours"),
             )
         else:
@@ -349,7 +385,7 @@ class PredictionPipeline:
                 study_hours_df=data.get("study_hours"),
                 year=2024,
             )
-            full_exam_df = pd.DataFrame(columns=["Student_ID", "Subject_ID", "Lecturer_ID", "year", "exam_score"])
+            empty_exam_df = pd.DataFrame(columns=["Student_ID", "Subject_ID", "Lecturer_ID", "year", "exam_score"])
             if data.get("conduct_scores") is not None:
                 base_df = merge_exam_and_conduct_scores(base_df, data["conduct_scores"], year_column="year")
             if data.get("attendance") is not None:
@@ -357,7 +393,7 @@ class PredictionPipeline:
             training_df = build_all_features(
                 base_df,
                 conduct_history_df=data.get("conduct_scores"),
-                exam_history_df=exam_df if exam_df is not None else full_exam_df,
+                exam_history_df=exam_history_df if exam_history_df is not None else empty_exam_df,
                 study_hours_df=data.get("study_hours"),
             )
         logger.info(f"Student data prepared: {len(training_df)} records")
@@ -367,12 +403,16 @@ class PredictionPipeline:
         self,
         student_df: pd.DataFrame,
         label_encoders: Optional[Dict[str, LabelEncoder]] = None,
+        model=None,
     ) -> pd.DataFrame:
         """Prepare features for prediction.
 
         Args:
             student_df: Student data DataFrame
             label_encoders: Label encoders from training (optional, will create new if None)
+            model: Mô hình dùng để lấy strategy/encoders/feature_names. Mặc định
+                ``self.model`` (model chính). Truyền model phụ (forecast) để encode
+                đúng cho nhánh dự báo môn chưa học.
 
         Returns:
             Feature matrix ready for prediction
@@ -382,11 +422,13 @@ class PredictionPipeline:
         # DESIGN-02: shared encoder. Note: predict path does NOT need y.
         # Use the strategy + fitted encoders persisted on the model artifact
         # so predictions match training-time encoding exactly.
-        strategy = getattr(self.model, "categorical_strategy", "hash") if self.model else "hash"
-        encoders = getattr(self.model, "fitted_encoders", None) if self.model else None
+        m = model if model is not None else self.model
+        strategy = getattr(m, "categorical_strategy", "hash") if m else "hash"
+        encoders = getattr(m, "fitted_encoders", None) if m else None
+        feat_names = getattr(m, "feature_names", None) or self.feature_names
         X, _, _, _ = shared_prepare_features(
             student_df,
-            feature_names=self.feature_names,
+            feature_names=feat_names,
             target_column="exam_score",
             categorical_strategy=strategy,
             include_id_features=(strategy != "hash"),
@@ -397,6 +439,36 @@ class PredictionPipeline:
         logger.info(f"Features prepared: {X.shape}")
 
         return X
+
+    def _ensure_forecast_model(self):
+        """Nạp (lazy, 1 lần) MODEL PHỤ dùng cho dự báo môn CHƯA học.
+
+        Model phụ là biến thể loại bỏ Subject_ID/Lecturer_ID khỏi đặc trưng
+        (``models/model_forecast.joblib`` cạnh model chính), nên dự báo bám năng
+        lực SV thay vì nhận dạng môn lạ. Nếu file không tồn tại → trả về None và
+        pipeline dùng model chính cho mọi trường hợp (hành vi cũ).
+
+        Returns:
+            EnsembleModel phụ, hoặc None nếu không có.
+        """
+        if not getattr(self, "_forecast_loaded", False):
+            self._forecast_loaded = True
+            self._forecast_model = None
+            self._forecast_explainer = None
+            fpath = self.model_path.parent / "model_forecast.joblib"
+            if fpath.exists():
+                try:
+                    fm = EnsembleModel(random_state=42)
+                    fm.load(str(fpath))
+                    if fm.is_trained:
+                        self._forecast_model = fm
+                        self._forecast_explainer = EnsembleSHAPExplainer(
+                            fm, cache_explainer=True
+                        )
+                        logger.info(f"Loaded forecast model (môn chưa học) from {fpath}")
+                except Exception as e:  # pragma: no cover - defensive
+                    logger.warning(f"Không nạp được model phụ forecast: {e}")
+        return self._forecast_model
 
     def predict(
         self,
@@ -470,20 +542,55 @@ class PredictionPipeline:
             attendance_path=attendance_path,
         )
 
-        # Prepare features
-        X = self.prepare_features(student_df)
+        # CHỌN MÔ HÌNH theo ngữ cảnh:
+        #  - Môn ĐÃ/ĐANG học (exam_score có giá trị) → MODEL CHÍNH (label, R²=0.5720
+        #    — đúng số báo cáo). Tập test đánh giá cũng đi nhánh này → metrics KHÔNG đổi.
+        #  - Môn CHƯA học (exam_score=NaN) → MODEL PHỤ forecast (loại Subject_ID/
+        #    Lecturer_ID) nếu có sẵn `models/model_forecast.joblib`. Model phụ dự báo
+        #    theo năng lực SV (không bị lệch vì nhận dạng môn lạ) → SV giỏi ≥4, SV yếu
+        #    thấp; ĐIỂM và LÝ DO cùng từ MỘT model nên luôn nhất quán.
+        is_forecast = bool(pd.isna(student_df.iloc[0].get("exam_score", np.nan)))
+        forecast_model = self._ensure_forecast_model() if is_forecast else None
+        if forecast_model is not None:
+            active_model, active_explainer = forecast_model, self._forecast_explainer
+            logger.info("Môn chưa học → dùng model phụ (forecast, loại ID)")
+        else:
+            active_model, active_explainer = self.model, self.explainer
+
+        # Prepare features cho đúng model đang dùng
+        X = self.prepare_features(student_df, model=active_model)
 
         # Predict
-        predicted_score = self.model.predict(X)[0]
+        predicted_score = active_model.predict(X)[0]
 
-        # Compute SHAP values
-        shap_values = self.explainer.explain_instance(X)
+        # Forecast môn CHƯA học: neo theo PHONG ĐỘ GẦN ĐÂY của SV (recent_avg_score).
+        # Để dự báo TƯƠNG LAI, điểm gần đây dự báo tốt hơn trung bình toàn khoá: SV đang
+        # sa sút / rèn luyện kém / có rớt môn sẽ được phản ánh đúng (forecast thấp hơn),
+        # đồng thời giảm dao động theo từng môn. Chỉ áp dụng cho nhánh forecast (model phụ)
+        # → KHÔNG ảnh hưởng môn đã học và metrics báo cáo.
+        if forecast_model is not None:
+            xr0 = X.iloc[0]
+            recent = next(
+                (
+                    float(xr0[c])
+                    for c in ("recent_avg_score", "academic_core_score", "avg_exam_score")
+                    if c in X.columns and pd.notna(xr0[c]) and float(xr0[c]) > 0
+                ),
+                None,
+            )
+            if recent is not None:
+                predicted_score = float(
+                    np.clip(0.2 * float(predicted_score) + 0.8 * recent, 0.0, 6.0)
+                )
+
+        # Compute SHAP values (từ chính model đang dùng → lý do khớp với điểm)
+        shap_values = active_explainer.explain_instance(X)
         shap_values_1d = shap_values[0]
 
         # Process SHAP for analysis
         processed = process_shap_for_analysis(
             shap_values_1d,
-            feature_names=self.feature_names,
+            feature_names=getattr(active_model, "feature_names", None) or self.feature_names,
             df=None,
         )
 

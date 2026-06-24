@@ -528,6 +528,7 @@ def preprocess_exam_scores(
     df: pd.DataFrame,
     convert_to_clo: bool = True,
     create_result: bool = True,
+    require_lecturer: bool = True,
 ) -> pd.DataFrame:
     """Complete preprocessing pipeline for exam scores data.
 
@@ -542,6 +543,13 @@ def preprocess_exam_scores(
         df: Raw exam scores DataFrame
         convert_to_clo: If True, convert scores from 10-point to 6-point scale (default: True)
         create_result: If True, create Result column (default: True)
+        require_lecturer: If True (default — training behaviour), rows with an invalid
+            ``Lecturer_ID`` are dropped (standardisation + missing-value filter). Set to
+            ``False`` only to build an exam *history* frame for predict-time academic
+            features: some cohorts (e.g. K28) record ``Lecturer_ID = NaN`` and would
+            otherwise be filtered out entirely, leaving the student with no history and a
+            degenerate prediction. The academic-history features do not use Lecturer_ID,
+            so keeping these rows is safe and does NOT affect the trained model.
 
     Returns:
         Preprocessed DataFrame ready for feature engineering
@@ -551,7 +559,8 @@ def preprocess_exam_scores(
     # Step 1: Standardize IDs
     df = standardize_student_id(df, id_column="Student_ID")
     df = standardize_subject_id(df, id_column="Subject_ID")
-    df = standardize_lecturer_id(df, id_column="Lecturer_ID")
+    if require_lecturer:
+        df = standardize_lecturer_id(df, id_column="Lecturer_ID")
 
     # Step 2: Clean exam_score
     df = clean_exam_score(df, score_column="exam_score", remove_invalid=True)
@@ -565,7 +574,9 @@ def preprocess_exam_scores(
         df = create_result_column(df, score_column="exam_score", result_column="Result")
 
     # Step 5: Handle missing values in key columns
-    key_columns = ["Student_ID", "Subject_ID", "Lecturer_ID", "exam_score"]
+    key_columns = ["Student_ID", "Subject_ID", "exam_score"]
+    if require_lecturer:
+        key_columns.insert(2, "Lecturer_ID")
     df = handle_missing_values(df, strategy="drop", columns=key_columns)
 
     # Step 6: Ensure year column (required for merging with conduct, attendance, study_hours)
