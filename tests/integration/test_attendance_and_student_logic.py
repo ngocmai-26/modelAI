@@ -58,6 +58,7 @@ class TestTrainAndPredictWithAttendance:
             assessment_methods_path=paths["ppdg"],
             study_hours_path=paths["study"],
             attendance_path=paths["attendance"],
+            bundle_forecast=False,  # test: bỏ nhúng model phụ cho nhanh
         )
         assert model.is_trained
         assert out.exists()
@@ -81,6 +82,7 @@ class TestTrainAndPredictWithAttendance:
             assessment_methods_path=paths["ppdg"],
             study_hours_path=paths["study"],
             attendance_path=paths["attendance"],
+            bundle_forecast=False,  # test: bỏ nhúng model phụ cho nhanh
         )
         assert out.exists()
 

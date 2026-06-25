@@ -28,6 +28,7 @@ class TestTrainingPipeline:
             teaching_methods_path="data/PPGDfull.xlsx" if Path("data/PPGDfull.xlsx").exists() else None,
             assessment_methods_path="data/PPDGfull.xlsx" if Path("data/PPDGfull.xlsx").exists() else None,
             study_hours_path="data/tuhoc.xlsx" if Path("data/tuhoc.xlsx").exists() else None,
+            bundle_forecast=False,  # test: bỏ nhúng model phụ cho nhanh
         )
 
         assert model.is_trained

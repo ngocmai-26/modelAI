@@ -581,6 +581,7 @@ class TrainingPipeline:
         study_hours_path: Optional[str] = None,
         attendance_path: Optional[str] = None,
         survey_path: Optional[str] = None,
+        bundle_forecast: bool = True,
     ) -> Tuple[EnsembleModel, Dict[str, float]]:
         """Run complete training pipeline.
 
@@ -593,6 +594,13 @@ class TrainingPipeline:
             assessment_methods_path: Path to assessment methods file (optional)
             study_hours_path: Path to study hours file (optional)
             attendance_path: Path to attendance (điểm danh) file (optional)
+            bundle_forecast: Mặc định True. Khi train model CHÍNH (label), tự huấn
+                luyện thêm model PHỤ (hash, loại Subject_ID/Lecturer_ID) và NHÚNG ẨN
+                vào cùng file ``output_path`` (``extra_metadata['forecast_bundle']``).
+                Nhờ đó backend giữ nguyên ``pipeline.run()`` mà vẫn có 1 file đầy đủ:
+                môn đã học → model chính (chỉ số báo cáo), môn chưa học → model phụ.
+                Model phụ KHÔNG tham gia đánh giá/dự đoán môn đã học (được giấu). Đặt
+                False để bỏ qua (ablation/encoding khác, hoặc test cho nhanh).
 
         Returns:
             Tuple of (trained_model, evaluation_metrics)
@@ -642,7 +650,60 @@ class TrainingPipeline:
         # Step 7: Save model
         self.save_model(model, output_path)
 
+        # Step 8 (production): nhúng ẨN model PHỤ (forecast môn chưa học) vào cùng
+        # file model chính. Chỉ làm cho model CHÍNH (label) để: (a) backend gọi
+        # run() như cũ vẫn ra 1 file đầy đủ; (b) tránh đệ quy (model phụ dùng hash);
+        # (c) không đụng các thí nghiệm ablation (hash/frequency/target).
+        if bundle_forecast and self.categorical_strategy == "label":
+            self._embed_forecast_bundle(
+                output_path,
+                exam_scores_path=exam_scores_path,
+                conduct_scores_path=conduct_scores_path,
+                demographics_path=demographics_path,
+                teaching_methods_path=teaching_methods_path,
+                assessment_methods_path=assessment_methods_path,
+                study_hours_path=study_hours_path,
+                attendance_path=attendance_path,
+                survey_path=survey_path,
+            )
+
         logger.info("Training pipeline completed successfully")
 
         return model, metrics
+
+    def _embed_forecast_bundle(self, output_path: str, **paths) -> None:
+        """Train model PHỤ (hash) và NHÚNG ẨN vào file model chính.
+
+        Model phụ loại bỏ Subject_ID/Lecturer_ID khỏi đặc trưng nên dự báo học phần
+        CHƯA học bám đúng năng lực sinh viên. Nó được lưu trong
+        ``extra_metadata['forecast_bundle']`` của model chính và CHỈ được
+        ``PredictionPipeline`` dùng khi forecast môn chưa học — mọi đánh giá/báo cáo và
+        dự đoán môn đã học vẫn chỉ dùng model chính (model phụ được giấu).
+        """
+        import os
+        import tempfile
+
+        import joblib
+
+        logger.info("Nhúng model PHỤ (forecast) vào %s", output_path)
+        tmp = os.path.join(tempfile.gettempdir(), "_ml_clo_forecast_embed.joblib")
+        fc = TrainingPipeline(
+            random_state=self.random_state,
+            test_size=self.test_size,
+            validation_size=self.validation_size,
+            group_split_by_student=self.group_split_by_student,
+            categorical_strategy="hash",  # loại Subject_ID/Lecturer_ID
+        )
+        fc.run(output_path=tmp, bundle_forecast=False, **paths)
+        forecast_model = EnsembleModel(random_state=self.random_state)
+        forecast_model.load(tmp)
+
+        primary = joblib.load(output_path)
+        primary.setdefault("extra_metadata", {})["forecast_bundle"] = forecast_model
+        joblib.dump(primary, output_path, compress=3)
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        logger.info("Đã nhúng forecast_bundle (model phụ ẩn trong %s)", output_path)
 
