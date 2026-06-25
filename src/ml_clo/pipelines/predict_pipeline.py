@@ -455,19 +455,31 @@ class PredictionPipeline:
             self._forecast_loaded = True
             self._forecast_model = None
             self._forecast_explainer = None
-            fpath = self.model_path.parent / "model_forecast.joblib"
-            if fpath.exists():
-                try:
-                    fm = EnsembleModel(random_state=42)
-                    fm.load(str(fpath))
-                    if fm.is_trained:
-                        self._forecast_model = fm
-                        self._forecast_explainer = EnsembleSHAPExplainer(
-                            fm, cache_explainer=True
-                        )
-                        logger.info(f"Loaded forecast model (môn chưa học) from {fpath}")
-                except Exception as e:  # pragma: no cover - defensive
-                    logger.warning(f"Không nạp được model phụ forecast: {e}")
+            fm = None
+            # (1) Ưu tiên BUNDLE nhúng trong chính model.joblib → BE chỉ cần nạp 1 file.
+            # Bundle là một object EnsembleModel đã huấn luyện, nhúng trong extra_metadata.
+            bundle = (getattr(self.model, "extra_metadata", {}) or {}).get("forecast_bundle")
+            if (
+                bundle is not None
+                and hasattr(bundle, "predict")
+                and getattr(bundle, "is_trained", False)
+            ):
+                fm = bundle
+                logger.info("Loaded forecast model (bundle nhúng trong model.joblib)")
+            # (2) Fallback: file riêng cạnh model chính (tương thích ngược).
+            if fm is None or not getattr(fm, "is_trained", False):
+                fpath = self.model_path.parent / "model_forecast.joblib"
+                if fpath.exists():
+                    try:
+                        fm = EnsembleModel(random_state=42)
+                        fm.load(str(fpath))
+                        logger.info(f"Loaded forecast model from {fpath}")
+                    except Exception as e:  # pragma: no cover - defensive
+                        logger.warning(f"Không nạp được model phụ forecast: {e}")
+                        fm = None
+            if fm is not None and getattr(fm, "is_trained", False):
+                self._forecast_model = fm
+                self._forecast_explainer = EnsembleSHAPExplainer(fm, cache_explainer=True)
         return self._forecast_model
 
     def predict(
