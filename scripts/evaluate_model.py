@@ -83,8 +83,15 @@ def main() -> int:
     pred = np.clip(model.predict(X_test), 0.0, 6.0)
     y_test = np.asarray(y_test, dtype=float)
 
+    has_bundle = "forecast_bundle" in (getattr(model, "extra_metadata", {}) or {})
+
     print("=" * 70)
     print(f"ĐÁNH GIÁ MÔ HÌNH — {args.model}  (test = {len(y_test)} mẫu)")
+    print(f"  Số đặc trưng mô hình chính : {len(model.feature_names)}")
+    print(f"  Chiến lược mã hoá          : {(model.extra_metadata or {}).get('categorical_strategy')}")
+    print("  >> CHỈ đánh giá MÔ HÌNH CHÍNH (model.predict). Model phụ forecast"
+          + (" (có trong file)" if has_bundle else "")
+          + " KHÔNG tham gia tính chỉ số.")
     print("=" * 70)
     print("\n[ HỒI QUY ]")
     print(f"  MAE        = {mean_absolute_error(y_test, pred):.4f}")

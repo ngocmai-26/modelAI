@@ -19,6 +19,28 @@ from ml_clo.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _attendance_data_missing(raw_feature_row: Optional[pd.Series]) -> bool:
+    """True khi KHÔNG có dữ liệu điểm danh (``attendance_rate`` = 0 do thiếu data).
+
+    Nhiều sinh viên — đặc biệt sinh viên khóa mới — không có dữ liệu điểm danh; khi đó
+    ``attendance_rate`` bị điền 0, KHÔNG phản ánh chuyên cần thật. Dùng để bỏ lý do
+    "Chuyên cần" oan trong trường hợp này (vẫn giữ attendance làm đặc trưng cho SV có
+    dữ liệu — chỉ chặn ở khâu sinh LỜI GIẢI THÍCH, không đụng mô hình).
+    """
+    if raw_feature_row is None:
+        return False
+    try:
+        v = raw_feature_row.get("attendance_rate")
+    except Exception:  # pragma: no cover - defensive
+        return False
+    if v is None or pd.isna(v):
+        return False
+    try:
+        return float(v) <= 0.0
+    except (TypeError, ValueError):  # pragma: no cover - defensive
+        return False
+
+
 def generate_reasons(
     top_negative_impacts: List[Tuple[str, float, float]],
     context: str = "individual",
@@ -45,6 +67,16 @@ def generate_reasons(
     reasons = []
 
     for group_name, shap_value, impact_percentage in top_negative_impacts:
+        # Bỏ lý do "Chuyên cần" khi KHÔNG có dữ liệu điểm danh (attendance_rate=0):
+        # tránh quy oan "thiếu chuyên cần" cho SV thiếu dữ liệu (vd khóa mới). Attendance
+        # vẫn là đặc trưng của mô hình — chỉ không hiển thị lý do này.
+        if (
+            context == "individual"
+            and group_name == "Chuyên cần"
+            and _attendance_data_missing(raw_feature_row)
+        ):
+            continue
+
         reason_text, calibrated = get_reason_template(
             group_name,
             impact_percentage,
